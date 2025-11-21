@@ -1,5 +1,5 @@
-from pre_llm_filter_functions import ParsingFunctionsPreLLM
-from cover_letter_generator import CoverLetterGenerator
+from ml.pre_llm_filter_functions import ParsingFunctionsPreLLM
+from ml.cover_letter_generator import CoverLetterGenerator
 from pprint import pprint
 """
 How to run this file:

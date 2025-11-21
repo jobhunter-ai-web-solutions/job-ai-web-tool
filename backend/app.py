@@ -31,6 +31,12 @@ import bcrypt
 import jwt
 from datetime import timedelta
 
+# ML imports
+from ml.pre_llm_filter_functions import ParsingFunctionsPreLLM
+from ml.cover_letter_generator import CoverLetterGenerator
+from ml.gemini_client import GeminiClient
+from auth import require_auth 
+
 # -----------------------------
 # Env & app
 # -----------------------------
@@ -1821,6 +1827,101 @@ def api_ai_cover_letter():
     """
     # Delegate to the existing implementation which reads from request.json
     return generate_cover_letter_api()
+
+@app.route("/api/ml/clean-resume", methods=["POST"])
+@require_auth
+def ml_clean_resume():
+    data = request.json or {}
+
+    text = data.get("text")
+    if not text:
+        return jsonify({"error": "Missing 'text'"}), 400
+
+    try:
+        parser = ParsingFunctionsPreLLM(None)   
+        cleaned = parser.clean_up_text(text)
+
+        return jsonify({"resume_text": cleaned}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/ml/cover-letter", methods=["POST"])
+@require_auth
+def ml_cover_letter():
+    data = request.json or {}
+
+    resume = data.get("resume")
+    job_desc = data.get("job_description")
+
+    if not resume or not job_desc:
+        return jsonify({"error": "resume and job_description are required"}), 400
+
+    try:
+        letter = generate_cover_letter(resume, job_desc)
+        return jsonify({"cover_letter": letter}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/ml/gemini", methods=["POST"])
+@require_auth
+def ml_gemini():
+    prompt = request.json.get("prompt")
+
+    if not prompt:
+        return jsonify({"error": "Missing 'prompt'"}), 400
+
+    try:
+        result = GeminiClient(prompt)
+        return jsonify({"response": result}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+from werkzeug.utils import secure_filename
+
+@app.route("/api/ml/upload-resume", methods=["POST"])
+@require_auth
+def ml_upload_resume():
+    if "file" not in request.files:
+        return jsonify({"error": "No file uploaded"}), 400
+
+    file = request.files["file"]
+
+    if file.filename == "":
+        return jsonify({"error": "Empty filename"}), 400
+
+    filename = secure_filename(file.filename)
+    filepath = f"/tmp/{filename}"
+    file.save(filepath)
+
+    try:
+        with open(filepath, "r", errors="ignore") as f:
+            text = f.read()
+
+        parser = ParsingFunctionsPreLLM(None)   
+        cleaned = parser.clean_up_text(text)
+
+        return jsonify({"resume_text": cleaned}), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/ml/job-match", methods=["POST"])
+@require_auth
+def ml_job_match():
+    data = request.json or {}
+
+    resume = data.get("resume_text")
+    jobs = data.get("job_list")
+
+    if not resume or not jobs:
+        return jsonify({"error": "resume_text and job_list required"}), 400
+
+    try:
+        matches = match_jobs(resume, jobs)
+        return jsonify({"matches": matches}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 
 # -----------------------------
 # Main
