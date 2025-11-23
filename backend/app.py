@@ -21,7 +21,7 @@ from flask import Flask, request, jsonify, make_response
 from flask_cors import CORS
 from dotenv import load_dotenv
 
-# Optional MySQL
+# MySQL
 import mysql.connector
 from werkzeug.utils import secure_filename
 from werkzeug.exceptions import HTTPException
@@ -33,7 +33,6 @@ import jwt
 from datetime import timedelta
 
 # ML Microservice configuration
-
 ML_SERVICE_URL = os.getenv("ML_SERVICE_URL", "http://localhost:8002").rstrip("/")
 ML_TIMEOUT = int(os.getenv("ML_TIMEOUT", "20"))
 
@@ -48,37 +47,47 @@ def ml_post(path: str, payload: dict):
         app.logger.error(f"[ML ERROR] {e}")
         raise
 
-# -----------------------------
-# Env & app
-# -----------------------------
+# Environment Loading & Flask App Setup
 load_dotenv()
 app = Flask(__name__)
 
-# Config: allow configuring how many characters of job description to return
+# General App Config
 JOB_DESCRIPTION_MAX_CHARS = int(os.getenv("JOB_DESCRIPTION_MAX_CHARS", "2000"))
 
-# Log whether Adzuna creds are available (do not print the secrets)
+# Logging: External API Credentials
 if os.getenv("ADZUNA_APP_ID") and os.getenv("ADZUNA_APP_KEY"):
     app.logger.info("Adzuna credentials found in environment")
 else:
     app.logger.warning(
-        "Adzuna credentials not found in environment; "
-        "set ADZUNA_APP_ID and ADZUNA_APP_KEY in .env or env"
+        "Adzuna credentials missing — set ADZUNA_APP_ID and ADZUNA_APP_KEY"
     )
 
-# CORS allowlist (env) or permissive for dev
+# CORS Configuration
 _allow = os.getenv("CORS_ALLOW_ORIGINS", "")
+# Convert comma separated list into python list
 origins = [o.strip() for o in _allow.split(",") if o.strip()]
 
-# Always give Flask-CORS a list (never None)
+# Default for dev
 if not origins:
-    origins = ["*"]  # Allow all for local dev
+    origins = [
+        "http://localhost:5173", 
+        "http://127.0.0.1:5173", 
+        "http://localhost:3000"
+    ]
 
-# JWT Utilities
+CORS(
+    app,
+    resources={r"/api/*": {"origins": origins}},
+    supports_credentials=True,
+    expose_headers=["Content-Type", "Authorization"],
+)
+
+# JWT / Auth Utilities
 JWT_SECRET = os.getenv("JWT_SECRET", "super-secret-key")
 JWT_ALGO = "HS256"
-JWT_EXPIRE_MINUTES = 30     # access token duartion
+JWT_EXPIRE_MINUTES = 30
 
+# Global Error Handlers
 @app.errorhandler(413)
 def too_large(e):
     return bad("File too large (max 5MB)", 413)
@@ -90,7 +99,6 @@ def handle_uncaught(e):
     app.logger.exception("Unhandled exception", exc_info=e)
     return bad("Server error", 500)
 
-CORS(app, origins=origins, supports_credentials=True)
 
 # -----------------------------
 # Gemini config
