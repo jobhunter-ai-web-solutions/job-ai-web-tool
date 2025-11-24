@@ -4,6 +4,9 @@ import os, re, json, random, string
 import requests
 from datetime import datetime, timezone 
 from typing import Any, Dict, List, Tuple
+import base64
+import bcrypt
+import jwt
 
 import sys, os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -20,7 +23,7 @@ from flask import Flask, request, jsonify, make_response
 from flask_cors import CORS
 from dotenv import load_dotenv
 
-# Optional MySQL
+# MySQL
 import mysql.connector
 from werkzeug.utils import secure_filename
 from werkzeug.exceptions import HTTPException
@@ -31,37 +34,62 @@ import bcrypt
 import jwt
 from datetime import timedelta
 
-# -----------------------------
-# Env & app
-# -----------------------------
+# ML Microservice configuration
+ML_SERVICE_URL = os.getenv("ML_SERVICE_URL", "http://localhost:8002").rstrip("/")
+ML_TIMEOUT = int(os.getenv("ML_TIMEOUT", "20"))
+
+def ml_post(path: str, payload: dict):
+    """Send POST request to ML microservice."""
+    url = f"{ML_SERVICE_URL}/{path.lstrip('/')}"
+    try:
+        r = requests.post(url, json=payload, timeout=ML_TIMEOUT)
+        r.raise_for_status()
+        return r.json()
+    except Exception as e:
+        app.logger.error(f"[ML ERROR] {e}")
+        raise
+
+# Environment Loading & Flask App Setup
 load_dotenv()
 app = Flask(__name__)
 
-# Config: allow configuring how many characters of job description to return
+# General App Config
 JOB_DESCRIPTION_MAX_CHARS = int(os.getenv("JOB_DESCRIPTION_MAX_CHARS", "2000"))
 
-# Log whether Adzuna creds are available (do not print the secrets)
+# Logging: External API Credentials
 if os.getenv("ADZUNA_APP_ID") and os.getenv("ADZUNA_APP_KEY"):
     app.logger.info("Adzuna credentials found in environment")
 else:
     app.logger.warning(
-        "Adzuna credentials not found in environment; "
-        "set ADZUNA_APP_ID and ADZUNA_APP_KEY in .env or env"
+        "Adzuna credentials missing — set ADZUNA_APP_ID and ADZUNA_APP_KEY"
     )
 
-# CORS allowlist (env) or permissive for dev
+# CORS Configuration
 _allow = os.getenv("CORS_ALLOW_ORIGINS", "")
+# Convert comma separated list into python list
 origins = [o.strip() for o in _allow.split(",") if o.strip()]
 
-# Always give Flask-CORS a list (never None)
+# Default for dev
 if not origins:
-    origins = ["*"]  # Allow all for local dev
+    origins = [
+        "http://localhost:5173", 
+        "http://127.0.0.1:5173", 
+        "http://localhost:3000"
+    ]
 
-# JWT Utilities
+CORS(
+    app,
+    resources={r"/api/*": {"origins": origins}},
+    supports_credentials=True,
+    expose_headers=["Content-Type", "Authorization"],
+)
+
+# JWT / Auth Utilities
 JWT_SECRET = os.getenv("JWT_SECRET", "super-secret-key")
 JWT_ALGO = "HS256"
-JWT_EXPIRE_MINUTES = 30     # access token duartion
+JWT_EXPIRE_MINUTES = 30
 
+# Global Error Handlers
 @app.errorhandler(413)
 def too_large(e):
     return bad("File too large (max 5MB)", 413)
@@ -73,7 +101,6 @@ def handle_uncaught(e):
     app.logger.exception("Unhandled exception", exc_info=e)
     return bad("Server error", 500)
 
-CORS(app, origins=origins, supports_credentials=True)
 
 # -----------------------------
 # Gemini config
@@ -456,19 +483,30 @@ def upload_resume():
 
     content = file.read() or b""
 
-    parsed = None
+    # Shared payload for ML service
+    safe_name = secure_filename(fname)
+    payload = {
+        "file_b64": base64.b64encode(content).decode("utf-8"),
+        "filename": safe_name,
+    }
+
     if mime == "application/pdf":
-        parsed = _parse_pdf_with_pre_llm(content)
-        text = parsed["cleaned_text"]
+        parsed = ml_post("parse-resume", payload)
+        text = parsed.get("cleaned_text", "")
+
     elif mime == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
         result = mammoth.extract_raw_text(BytesIO(content))
         raw = (result.value or "").strip()
-        parsed = _parse_plain_text_with_pre_llm(raw)
+        payload["raw_text"] = raw
+        parsed = ml_post("parse-resume", payload)
         text = parsed["cleaned_text"]
+
     else:  # text/plain
         raw = content.decode("utf-8", errors="ignore")
-        parsed = _parse_plain_text_with_pre_llm(raw)
+        payload["raw_text"] = raw
+        parsed = ml_post("parse-resume", payload)
         text = parsed["cleaned_text"]
+
 
     meta_blob = {}
     if parsed:
@@ -587,17 +625,28 @@ def resume_replace_existing(rid: int):
     content = f.read() or b""
 
     parsed = None
+    safe_name = secure_filename(f.filename)
+
+    payload = {
+        "file_b64": base64.b64encode(content).decode("utf-8"),
+        "filename": safe_name,
+    }
+
     if mime == "application/pdf":
-        parsed = _parse_pdf_with_pre_llm(content)
-        text = parsed["cleaned_text"]
+        parsed = ml_post("parse-resume", payload)
+        text = parsed.get("cleaned_text", "")
+
     elif mime == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
         result = mammoth.extract_raw_text(BytesIO(content))
         raw = (result.value or "").strip()
-        parsed = _parse_plain_text_with_pre_llm(raw)
+        payload["raw_text"] = raw
+        parsed = ml_post("parse-resume", payload)
         text = parsed["cleaned_text"]
+
     else:  # text/plain
         raw = content.decode("utf-8", errors="ignore")
-        parsed = _parse_plain_text_with_pre_llm(raw)
+        payload["raw_text"] = raw
+        parsed = ml_post("parse-resume", payload)
         text = parsed["cleaned_text"]
 
     safe_name = secure_filename(f.filename)
@@ -1325,28 +1374,6 @@ def recommend():
 
     return ok({"results": results})
 
-
-# POST /api/jobs/recommend { "job_title": "...", "skills": [...], "location": "..." }
-@app.post("/api/jobs/recommend")
-def job_recommend_mock():
-    data = request.get_json(force=True) or {}
-    job_title = data.get("job_title")
-    skills = data.get("skills", [])
-    location = data.get("location")
-
-    # Validate required fields
-    if not job_title or not skills or not location:
-        return bad("Missing required field(s): job_title, skills, and location are required")
-
-    # Mock response
-    mock_score = 85 if "data analysis" in [s.lower() for s in skills] else 70
-    return ok({
-        "message": "Job recommendation generated successfully",
-        "input": data,
-        "mock_score": mock_score,
-    })
-
-
 @app.get('/api/jobs/<int:job_id>')
 def get_job(job_id: int):
     """
@@ -1764,16 +1791,15 @@ def generate_cover_letter_api():
 
     if use_gemini:
         try:
-            generator = CoverLetterGenerator()
-            cover_letter_text = generator.generate_cover_letter(
-                contacts=contacts,
-                sections=sections,
-                tone="professional",
-                job_title=title,
-                company=company,
-                job_description=description,
-                job_board=(job_obj.get("job_board") or None),
-            )
+            cover_letter_text = ml_post("generate-cover-letter", {
+                "job_title": title,
+                "company": company,
+                "job_description": description,
+                "contacts": contacts,
+                "sections": sections,
+                "candidate_name": candidate_name,
+            }).get("cover_letter")
+
         except Exception as e:
             app.logger.exception(f"Gemini generation failed, falling back: {e}")
 
@@ -1821,6 +1847,20 @@ def api_ai_cover_letter():
     """
     # Delegate to the existing implementation which reads from request.json
     return generate_cover_letter_api()
+
+@app.get("/api/health/ml")
+def ml_health():
+    try:
+        r = requests.get(f"{ML_SERVICE_URL}/health", timeout=5)
+        r.raise_for_status()
+        return ok({
+            "ml_status": "up",
+            "details": r.json()
+        })
+    except Exception as e:
+        app.logger.error(f"[ML HEALTH ERROR] {e}")
+        return bad("ML service unavailable", 503)
+
 
 # -----------------------------
 # Main
