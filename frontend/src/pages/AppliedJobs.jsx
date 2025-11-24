@@ -1,6 +1,7 @@
 import { useState, useEffect} from 'react'
 import { Link } from 'react-router-dom'
 import './jobAI.css'
+import { getAppliedJobs } from '../api/api'
 
 export default function AppliedJobs() {
   useEffect(() => { document.title = 'Applied Jobs – jobhunter.ai' }, [])
@@ -8,17 +9,7 @@ export default function AppliedJobs() {
   useEffect(() => {
     async function loadAppliedJobs() {
       try {
-        const res = await fetch('/api/users/me/applied-jobs', {
-          credentials: 'include',
-        })
-
-        if (!res.ok) {
-          console.error('Failed to load applied jobs', res.status)
-          setJobs([])
-          return
-        }
-
-        const data = await res.json()
+        const data = await getAppliedJobs()
         setJobs(Array.isArray(data) ? data : [])
       } catch (err) {
         console.error('Error fetching applied jobs', err)
