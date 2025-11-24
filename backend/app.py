@@ -5,6 +5,8 @@ import requests
 from datetime import datetime, timezone 
 from typing import Any, Dict, List, Tuple
 import base64
+import bcrypt
+import jwt
 
 import sys, os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))

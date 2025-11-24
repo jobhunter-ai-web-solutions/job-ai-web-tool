@@ -1,5 +1,9 @@
 {
   "devDependencies": {
     "@vitejs/plugin-react-swc": "^4.2.1"
+  },
+  "dependencies": {
+    "dompurify": "^3.3.0",
+    "jsonwebtoken": "^9.0.2"
   }
 }
