@@ -163,7 +163,7 @@ function JobCard({job, formatSalary, onRemove, onApply}) {
         <div style={{ display:'flex', gap:8, justifyContent:'flex-end', paddingTop:6}}>
           <a href={job.url || '#'}><button>View</button></a>
           <button onClick={() => onRemove && onRemove()}>Remove</button>
-          <button onClick={() => onApply && onApply()}>Apply</button>
+          <button onClick={() => onApply && onApply()}>Confirm Applied</button>
         </div>
       </div>
     </div>
