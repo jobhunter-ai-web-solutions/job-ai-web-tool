@@ -1,0 +1,12 @@
+-- DB Index Optimization Migration
+
+ALTER TABLE jobs
+ADD INDEX idx_jobs_search (title, company_name, location);
+
+ALTER TABLE saved_jobs
+ADD INDEX idx_savedjobs_user (user_id),
+ADD INDEX idx_savedjobs_job (job_id);
+
+ALTER TABLE applied_jobs
+ADD INDEX idx_appliedjobs_user (user_id),
+ADD INDEX idx_appliedjobs_job (job_id);
