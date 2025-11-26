@@ -1,5 +1,6 @@
 import { useState, useEffect} from 'react'
 import { Link } from 'react-router-dom'
+import { getAppliedJobs } from '../api/api'
 import './jobAI.css'
 import { getAppliedJobs } from '../api/api'
 

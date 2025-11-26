@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react'
 import DOMPurify from 'dompurify'
 import { Link } from 'react-router-dom'
 import './jobAI.css'
-import { searchJobs, getRecommendations, generateCoverLetter, saveJob, applyJob, getJob } from '../api/api'
+import { searchJobs, getRecommendations, generateCoverLetter, saveJob, applyJob, getJob, getAppliedJobs } from '../api/api'
 
 export default function MatchedAI() {
   useEffect(() => { document.title = 'AI Matched Jobs – jobhunter.ai' }, [])
@@ -79,6 +79,44 @@ export default function MatchedAI() {
 
       setJobs(mapped)
 
+      // Merge applied state: fetch user's applied jobs and mark matched results
+      try {
+        const applied = await getAppliedJobs()
+        // applied may be array of job objects; create sets for robust matching
+        const arr = Array.isArray(applied) ? applied : []
+        const appliedIds = new Set(arr.map((a) => a.job_id).filter(Boolean))
+        const appliedUrls = new Set(arr.map((a) => (a.url || '').trim()).filter(Boolean))
+
+        // Build a normalized key (title|company|location) set for fuzzy matching
+        const normalize = (s = '') => String(s || '')
+          .toLowerCase()
+          .replace(/https?:\/\//, '')
+          .replace(/[#?].*$/, '') // strip hash/query
+          .replace(/[\W_]+/g, ' ') // non-word -> space
+          .trim()
+          .replace(/\s+/g, ' ')
+
+        const appliedKeys = new Set(arr.map((a) => {
+          const t = normalize(a.title || a.job_title || '')
+          const c = normalize(a.company_name || a.company || '')
+          const l = normalize(a.location || '')
+          return `${t}|${c}|${l}`
+        }))
+
+        if (appliedIds.size || appliedUrls.size || appliedKeys.size) {
+          const merged = mapped.map((m) => {
+            const byId = m.job_id && appliedIds.has(m.job_id)
+            const byUrl = m.url && appliedUrls.has(String(m.url).trim())
+            const mKey = `${normalize(m.title)}|${normalize(m.company)}|${normalize(m.location)}`
+            const byKey = appliedKeys.has(mKey)
+            return { ...m, applied: Boolean(byId || byUrl || byKey) }
+          })
+          setJobs(merged)
+        }
+      } catch (err) {
+        // Non-fatal: if applied jobs can't be fetched (unauthenticated, backend down), ignore
+      }
+
       if (data) {
         setPage(Number(data.page || 1));
         setTotalResults(Number((data.totalResults ?? data.total_results) || 0));
@@ -142,7 +180,9 @@ export default function MatchedAI() {
     // If job_id present, fetch fresh details from backend
     if (job && job.job_id) {
       getJob(job.job_id).then((data) => {
-        setSelectedJob(data)
+        // Preserve any known applied state from the current list
+        const knownApplied = jobs.find((j) => j.job_id === data.job_id)?.applied
+        setSelectedJob(knownApplied ? { ...data, applied: true } : data)
       }).catch((err) => {
         console.error('getJob failed', err)
         // fall back to using provided job object
@@ -178,6 +218,10 @@ export default function MatchedAI() {
     try {
       await applyJob(job.job_id)
       setJobModalMessage('Marked as applied')
+      // Update local jobs state immediately so UI reflects applied status without needing a full refresh
+      setJobs((prev) => prev.map((j) => (j.job_id === job.job_id ? { ...j, applied: true } : j)))
+      // If the job is currently selected in the modal, update that too
+      setSelectedJob((s) => (s && s.job_id === job.job_id ? { ...s, applied: true } : s))
     } catch (err) {
       console.error('applyJob failed', err)
       setJobModalMessage(String(err?.message || 'Failed to apply to job'))
@@ -484,7 +528,7 @@ v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c
                     </div>
                     <div style={{ marginTop: 12, display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
                       <button onClick={() => handleSaveJob(selectedJob)} disabled={jobActionLoading}>Save</button>
-                      <button onClick={() => handleApplyJob(selectedJob)} disabled={jobActionLoading}>Apply</button>
+                      <button onClick={() => handleApplyJob(selectedJob)} disabled={jobActionLoading || selectedJob?.applied}>{selectedJob?.applied ? 'Applied' : 'Apply'}</button>
                       <button onClick={() => { if (!jobActionLoading) { closeJobModal(); handleGenerateCoverLetter(selectedJob); } }}>Cover Letter</button>
                       <a href={selectedJob?.url || selectedJob?.url || '#'} target="_blank" rel="noreferrer"><button>Open Original</button></a>
                     </div>
@@ -584,7 +628,7 @@ function JobCard({job, formatSalary, onView, onSave, onApply, onGenerateCover}) 
         <div style={{ display:'flex', gap:8, justifyContent:'flex-end', paddingTop:6}}>
           <button onClick={() => onView && onView()}>View</button>
           <button onClick={() => onSave && onSave()}>Save</button>
-          <button onClick={() => onApply && onApply()}>Apply</button>
+          <button onClick={() => onApply && onApply()} disabled={job.applied} aria-pressed={!!job.applied}>{job.applied ? 'Applied' : 'Apply'}</button>
           <button onClick={() => onGenerateCover && onGenerateCover()}>Cover Letter</button>
         </div>
       </div>
