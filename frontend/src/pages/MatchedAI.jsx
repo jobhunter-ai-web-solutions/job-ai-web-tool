@@ -2,7 +2,8 @@ import { useState, useEffect, useMemo, useCallback } from 'react'
 import DOMPurify from 'dompurify'
 import { Link } from 'react-router-dom'
 import './jobAI.css'
-import { searchJobs, getRecommendations, generateCoverLetter, saveJob, applyJob, getJob } from '../api/api'
+import { searchJobs, getRecommendations, generateCoverLetter, saveJob, applyJob, getJob, getAppliedJobs } from '../api/api'
+
 
 export default function MatchedAI() {
   useEffect(() => { document.title = 'AI Matched Jobs – jobhunter.ai' }, [])
@@ -31,6 +32,7 @@ export default function MatchedAI() {
   const [filterAppliedButNoResults, setFilterAppliedButNoResults] = useState(false)
   const [unfilteredTotalResults, setUnfilteredTotalResults] = useState(null)
   const [copyStatus, setCopyStatus] = useState('')
+  const [appliedJobIds, setAppliedJobIds] = useState(new Set())
 
   const formatSalary = (val) => `$${Math.round((val || 0) / 1000)}k`
 
@@ -51,6 +53,30 @@ export default function MatchedAI() {
     if (s.includes('senior')) return 'Senior'
     return expLevel
   }
+
+  const refreshAppliedJobs = useCallback(async () => {
+    try {
+      const data = await getAppliedJobs()
+      //**TEST
+      console.log('Applied rows from backend:', data)
+
+      const ids = new Set(
+        (Array.isArray(data) ? data : [])
+          .filter(row => row && row.job_id != null)
+          .map(row => String(row.job_id))
+      )
+
+      setAppliedJobIds(ids)
+    } catch (err) {
+      console.error('Failed to load applied jobs', err)
+      setAppliedJobIds(new Set())
+    }
+  }, [])
+
+
+  useEffect(() => {
+    refreshAppliedJobs()
+  }, [refreshAppliedJobs])
 
   const fetchJobs = useCallback(async (opts = {}) => {
     const payload = {
@@ -173,11 +199,18 @@ export default function MatchedAI() {
   }
 
   const handleApplyJob = async (job) => {
+    if (!job || !job.job_id) return
     setJobActionLoading(true)
     setJobModalMessage('')
     try {
       await applyJob(job.job_id)
       setJobModalMessage('Marked as applied')
+
+      setAppliedJobIds(prev => {
+        const next = new Set(prev)
+        next.add(String(job.job_id))
+        return next
+      })
     } catch (err) {
       console.error('applyJob failed', err)
       setJobModalMessage(String(err?.message || 'Failed to apply to job'))
@@ -185,6 +218,7 @@ export default function MatchedAI() {
       setJobActionLoading(false)
     }
   }
+
 
   const filterJobs = useMemo(() => {
     return jobs.filter((j) => {
@@ -437,6 +471,7 @@ v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c
                 onSave={() => handleSaveJob(job)}
                 onApply={() => handleApplyJob(job)}
                 onGenerateCover={() => handleGenerateCoverLetter(job)}
+                isApplied={appliedJobIds.has(String(job.job_id))}
               />
             ))}
           </section>
@@ -484,7 +519,17 @@ v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c
                     </div>
                     <div style={{ marginTop: 12, display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
                       <button onClick={() => handleSaveJob(selectedJob)} disabled={jobActionLoading}>Save</button>
-                      <button onClick={() => handleApplyJob(selectedJob)} disabled={jobActionLoading}>Apply</button>
+                      <button
+                        onClick={() => handleApplyJob(selectedJob)}
+                        disabled={
+                          jobActionLoading ||
+                          (selectedJob && appliedJobIds.has(String(selectedJob.job_id)))
+                        }
+                      >
+                        {selectedJob && appliedJobIds.has(String(selectedJob.job_id))
+                          ? 'Confirmed'
+                          : 'Confirm Applied'}
+                      </button>
                       <button onClick={() => { if (!jobActionLoading) { closeJobModal(); handleGenerateCoverLetter(selectedJob); } }}>Cover Letter</button>
                       <a href={selectedJob?.url || selectedJob?.url || '#'} target="_blank" rel="noreferrer"><button>Open Original</button></a>
                     </div>
@@ -557,7 +602,13 @@ v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c
   )
 }
 
-function JobCard({job, formatSalary, onView, onSave, onApply, onGenerateCover}) {
+function JobCard({job, formatSalary, onView, onSave, onApply, onGenerateCover, isApplied}) {
+  //**TEST
+    console.log('Search job ids:', {
+    job_id: job.job_id,
+    external_id: job.external_id,
+    original_job_id: job.original_job_id
+  })
   return (
     <div data-slot="card" className="bg-card text-card-foreground border" style={{padding: '12px 16px'}}>
       <div data-slot="card-header" style={{textAlign: 'left'}}>
@@ -583,9 +634,14 @@ function JobCard({job, formatSalary, onView, onSave, onApply, onGenerateCover}) 
   <div data-slot="card-content">
         <div style={{ display:'flex', gap:8, justifyContent:'flex-end', paddingTop:6}}>
           <button onClick={() => onView && onView()}>View</button>
-          <button onClick={() => onSave && onSave()}>Save</button>
-          <button onClick={() => onApply && onApply()}>Apply</button>
-          <button onClick={() => onGenerateCover && onGenerateCover()}>Cover Letter</button>
+        <button onClick={() => onSave && onSave()}>Save</button>
+        <button
+          onClick={() => !isApplied && onApply && onApply()}
+          disabled={isApplied}
+        >
+          {isApplied ? 'Confirmed' : 'Confirm Applied'}
+        </button>
+        <button onClick={() => onGenerateCover && onGenerateCover()}>Cover Letter</button>
         </div>
       </div>
     </div>
