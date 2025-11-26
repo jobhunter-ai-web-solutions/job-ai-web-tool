@@ -291,6 +291,15 @@ export async function applyJob(jobId) {
   return handleResponse(res);
 }
 
+// Get applied jobs for the current user (returns an array of applied job objects)
+export async function getAppliedJobs() {
+  const token = getToken()
+  const headers = { 'Content-Type': 'application/json' }
+  if (token) headers['Authorization'] = `Bearer ${token}`
+  const res = await fetch(`${API_BASE}/users/me/applied-jobs`, { headers, credentials: 'include' })
+  return handleResponse(res)
+}
+
 // Register a new user
 export async function authRegister(payload) {
   const res = await fetch(`${API_BASE}/auth/register`, {
