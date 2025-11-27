@@ -1703,6 +1703,25 @@ def apply_to_job():
     except mysql.connector.IntegrityError:
         return bad("You already applied to this job", 409)
 
+@app.delete("/api/users/me/applied-jobs/<int:job_id>")
+def delete_applied_job(job_id):
+    user_id = _get_user_id()
+    if not user_id:
+        return bad("Unauthorized", 401)
+
+    db, cursor = get_db()
+    if not db:
+        return bad("Database not configured", 500)
+
+    cursor.execute("""
+        DELETE FROM applied_jobs
+        WHERE user_id=%s AND job_id=%s
+    """, (user_id, job_id))
+
+    db.commit()
+
+    return ok({"message": "Removed applied job"})
+
 @app.get("/api/users/me/applied-jobs")
 def get_applied_jobs():
     user_id = _get_user_id()

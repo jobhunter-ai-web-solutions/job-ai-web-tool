@@ -1,6 +1,7 @@
 import { useState, useEffect} from 'react'
 import { Link } from 'react-router-dom'
 import { getAppliedJobs } from '../api/api'
+import { deleteAppliedJob } from '../api/api'
 import './jobAI.css'
 
 export default function AppliedJobs() {
@@ -22,6 +23,16 @@ export default function AppliedJobs() {
 
   const [jobs, setJobs] = useState([]);
   
+  const handleRemove = async (job) => {
+  if (!job || !job.job_id) return
+  try {
+    await deleteAppliedJob(job.job_id)
+    setJobs(prev => prev.filter(j => j.job_id !== job.job_id))
+  } catch (err) {
+    console.error('deleteAppliedJob failed', err)
+  }
+}
+
   const formatSalary = (val) => `$${Math.round(val / 1000)}k`
 
   return (
@@ -76,9 +87,14 @@ export default function AppliedJobs() {
             </div>
           )}
           {/* Populate job cards */}
-          {jobs.map((job,index) => (
-          <JobCard key={index} job={job} formatSalary={formatSalary}/>
-          ))}
+            {jobs.map((job,index) => (
+              <JobCard
+                key={job.job_id || index}
+                job={job}
+                formatSalary={formatSalary}
+                onRemove={() => handleRemove(job)}
+              />
+            ))}
           </section>
         </main>
       </div>
@@ -86,7 +102,7 @@ export default function AppliedJobs() {
   )
 }
 
-function JobCard({job, formatSalary}) {
+function JobCard({job, formatSalary, onRemove}) {
   const title = job.title
   const company = job.company_name || job.company
   const location = job.location
@@ -127,6 +143,9 @@ function JobCard({job, formatSalary}) {
           >
             <button>View</button>
           </a>
+            <button onClick={() => onRemove && onRemove()}>
+              Remove from Applied
+            </button>
         </div>
       </div>
     </div>

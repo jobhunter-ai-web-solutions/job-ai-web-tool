@@ -340,3 +340,14 @@ export async function deleteSavedJob(jobId) {
   })
   return handleResponse(res)
 }
+
+export async function deleteAppliedJob(jobId) {
+  const token = getToken()
+  const headers = { 'Content-Type': 'application/json' }
+  if (token) headers['Authorization'] = `Bearer ${token}`
+  const res = await fetch(`${API_BASE}/users/me/applied-jobs/${jobId}`, {
+    method: 'DELETE',
+    headers,
+  })
+  return handleResponse(res)
+}
