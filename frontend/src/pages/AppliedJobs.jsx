@@ -19,19 +19,38 @@ export default function AppliedJobs() {
     }
 
     loadAppliedJobs()
+    
+    // Listen for changes from MatchedAI tab (when jobs are added)
+    const handleAppliedJobsChange = (event) => {
+      if (event.detail?.action === 'added') {
+        // Refresh the list when a job is added from another tab
+        loadAppliedJobs()
+      }
+    }
+    
+    window.addEventListener('appliedJobsChanged', handleAppliedJobsChange)
+    
+    return () => {
+      window.removeEventListener('appliedJobsChanged', handleAppliedJobsChange)
+    }
   }, [])
 
   const [jobs, setJobs] = useState([]);
   
   const handleRemove = async (job) => {
-  if (!job || !job.job_id) return
-  try {
-    await deleteAppliedJob(job.job_id)
-    setJobs(prev => prev.filter(j => j.job_id !== job.job_id))
-  } catch (err) {
-    console.error('deleteAppliedJob failed', err)
+    if (!job || !job.job_id) return
+    try {
+      await deleteAppliedJob(job.job_id)
+      setJobs(prev => prev.filter(j => j.job_id !== job.job_id))
+      
+      // Notify other tabs/components that applied jobs changed
+      window.dispatchEvent(new CustomEvent('appliedJobsChanged', { 
+        detail: { action: 'removed', job_id: job.job_id } 
+      }))
+    } catch (err) {
+      console.error('deleteAppliedJob failed', err)
+    }
   }
-}
 
   const formatSalary = (val) => `$${Math.round(val / 1000)}k`
 
