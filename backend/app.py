@@ -19,7 +19,7 @@ import pdfplumber
 from io import BytesIO
 import html as _html
 
-from flask import Flask, request, jsonify, make_response
+from flask import Flask, request, jsonify, make_response, g
 from flask_cors import CORS
 from dotenv import load_dotenv
 
@@ -115,36 +115,93 @@ else:
     app.logger.warning("GEMINI_API_KEY not set; /api/chat will return an error")
 
 # -----------------------------
-# DB helpers (uses your global connection style, but with safe fallback)
+# DB helpers (uses thread-local Flask 'g' for connection safety)
 # -----------------------------
 USE_DB = all(os.getenv(k) for k in ["DB_HOST", "DB_USER", "DB_NAME"])
-_db = None
-_cursor = None
 
 
 def get_db():
-    global _db, _cursor
+    """
+    Prefer PyMySQL connection when available (pure-Python, robust).
+    Fall back to mysql-connector-python if PyMySQL is not installed or fails.
+    Returns (db_conn, cursor) or (None, None) on failure.
+    
+    Uses Flask's 'g' object for thread-local storage to avoid thread-safety issues.
+    """
     if not USE_DB:
         return None, None
+
+    # Check if we have a thread-local connection
+    if hasattr(g, '_db') and g._db is not None:
+        try:
+            # Test if connection is still alive
+            if hasattr(g._db, "ping"):
+                # pymysql exposes ping(reconnect=True) - auto-reconnect!
+                try:
+                    g._db.ping(reconnect=True)  # Auto-reconnect if connection lost
+                except TypeError:
+                    # some connectors have different signature
+                    g._db.ping()
+            elif hasattr(g._db, "is_connected"):
+                if not g._db.is_connected():
+                    raise Exception("stale connection")
+            return g._db, g._cursor
+        except Exception as e:
+            # Connection is dead and couldn't reconnect, log and clear
+            app.logger.warning(f"DB connection lost, reconnecting: {e}")
+            try:
+                g._db.close()
+            except Exception:
+                pass
+            g._db = None
+            g._cursor = None
+
+    # Try PyMySQL first (pure-Python, avoids mysql_native_password .so issues)
     try:
-        if _db is None or not _db.is_connected():
-            _db = mysql.connector.connect(
-                host=os.getenv("DB_HOST"),
-                user=os.getenv("DB_USER"),
-                password=os.getenv("DB_PASSWORD"),
-                database=os.getenv("DB_NAME"),
-                autocommit=True,
-                use_pure=True,
-            )
-            _cursor = _db.cursor(dictionary=True)
-        return _db, _cursor
+        import pymysql
+        import pymysql.cursors
+
+        g._db = pymysql.connect(
+            host=os.getenv("DB_HOST"),
+            user=os.getenv("DB_USER"),
+            password=os.getenv("DB_PASSWORD"),
+            db=os.getenv("DB_NAME"),
+            cursorclass=pymysql.cursors.DictCursor,
+            autocommit=True,
+        )
+        g._cursor = g._db.cursor()
+        app.logger.info("Connected to MySQL via PyMySQL (thread-local)")
+        return g._db, g._cursor
+    except Exception as e_py:
+        app.logger.info(f"PyMySQL connect failed (will try mysql-connector): {e_py}")
+
+    # Fallback: try mysql-connector (use_pure=True) as before
+    try:
+        g._db = mysql.connector.connect(
+            host=os.getenv("DB_HOST"),
+            user=os.getenv("DB_USER"),
+            password=os.getenv("DB_PASSWORD"),
+            database=os.getenv("DB_NAME"),
+            autocommit=True,
+            use_pure=True,
+        )
+        g._cursor = g._db.cursor(dictionary=True)
+        app.logger.info("Connected to MySQL via mysql-connector-python (thread-local)")
+        return g._db, g._cursor
     except Exception as e:
         app.logger.warning(f"MySQL unavailable, using memory store. Error: {e}")
         return None, None
 
 
-# Try to connect once at startup
-# get_db()
+@app.teardown_appcontext
+def close_db(exception=None):
+    """Close the database connection at the end of each request."""
+    db = g.pop('_db', None)
+    if db is not None:
+        try:
+            db.close()
+        except Exception:
+            pass
 
 # -----------------------------
 # Resume Upload Helpers
@@ -1104,6 +1161,7 @@ def jobs_search():
     ## Iterate over each job result
     for job in data.get("results", []):
         job_id = None
+        adzuna_id = job.get("id")  # Adzuna's unique job ID
         title = job.get("title")
         company = job.get("company", {}).get("display_name")
         location_name = job.get("location", {}).get("display_name")
@@ -1121,24 +1179,31 @@ def jobs_search():
         exp_text = f"{title or ''} {description or ''}"
         experience_level = extract_experience_level_helper(exp_text)
 
-        ## UPSERT (insert or update existing)
+        ## UPSERT (insert or update existing based on external_id from Adzuna)
         if db:
             try:
+                # Use external_id (Adzuna ID) as the primary matching key
+                # This ensures the same job gets the same job_id across searches
                 cursor.execute(
                     '''
-                    INSERT INTO jobs (title, company_name, industry, description, location, salary_range, source, url)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    INSERT INTO jobs (external_id, title, company_name, industry, description, location, salary_range, source, url)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON DUPLICATE KEY UPDATE
+                        title = VALUES(title),
+                        company_name = VALUES(company_name),
                         description = VALUES(description),
                         salary_range = VALUES(salary_range),
+                        url = VALUES(url),
                         posted_at = CURRENT_TIMESTAMP
                     ''',
-                    (title, company, category, description, location_name, f"{salary_min}-{salary_max}", source, url_job)
+                    (adzuna_id, title, company, category, description, location_name, f"{salary_min}-{salary_max}", source, url_job)
                 )
-                cursor.execute("SELECT job_id FROM jobs WHERE title=%s AND company_name=%s AND location=%s AND url=%s",
-                               (title, company, location_name, url_job))
-                job_id = cursor.fetchone()["job_id"]
-                job_ids.append(job_id)
+                # Get the job_id (either newly inserted or existing)
+                cursor.execute("SELECT job_id FROM jobs WHERE external_id = %s", (adzuna_id,))
+                result = cursor.fetchone()
+                if result:
+                    job_id = result["job_id"]
+                    job_ids.append(job_id)
             except Exception as e:
                 app.logger.warning(f"Job UPSERT failed: {e}")
 
@@ -1200,7 +1265,8 @@ def jobs_search():
 
         ## Return clean job JSON
         results.append({
-            "job_id": job_id,
+            "job_id": job_id,  # Database auto-increment ID
+            "adzuna_id": adzuna_id,  # Adzuna's external ID
             "title": title,
             "company": company,
             "location": location_name,
@@ -1691,6 +1757,8 @@ def apply_to_job():
         return bad("Missing job_id")
 
     db, cursor = get_db()
+    if not db:
+        return bad("Database not available", 500)
 
     try:
         cursor.execute("""
@@ -1698,10 +1766,17 @@ def apply_to_job():
             VALUES (%s, %s)
         """, (user_id, job_id))
 
-        db.commit()
+        # Commit is redundant with autocommit=True but harmless
+        if hasattr(db, 'commit'):
+            db.commit()
         return ok({"message": "Job marked as applied"})
-    except mysql.connector.IntegrityError:
-        return bad("You already applied to this job", 409)
+    except Exception as e:
+        # Handle both PyMySQL and mysql-connector IntegrityError
+        error_str = str(e).lower()
+        if 'duplicate' in error_str or 'integrity' in error_str:
+            return bad("You already applied to this job", 409)
+        app.logger.error(f"Error applying to job: {e}")
+        return bad(f"Failed to apply: {e}", 500)
 
 @app.delete("/api/users/me/applied-jobs/<int:job_id>")
 def delete_applied_job(job_id):
@@ -1713,14 +1788,20 @@ def delete_applied_job(job_id):
     if not db:
         return bad("Database not configured", 500)
 
-    cursor.execute("""
-        DELETE FROM applied_jobs
-        WHERE user_id=%s AND job_id=%s
-    """, (user_id, job_id))
+    try:
+        cursor.execute("""
+            DELETE FROM applied_jobs
+            WHERE user_id=%s AND job_id=%s
+        """, (user_id, job_id))
 
-    db.commit()
+        # Commit is redundant with autocommit=True but harmless
+        if hasattr(db, 'commit'):
+            db.commit()
 
-    return ok({"message": "Removed applied job"})
+        return ok({"message": "Removed applied job"})
+    except Exception as e:
+        app.logger.error(f"Error deleting applied job: {e}")
+        return bad(f"Failed to delete: {e}", 500)
 
 @app.get("/api/users/me/applied-jobs")
 def get_applied_jobs():
