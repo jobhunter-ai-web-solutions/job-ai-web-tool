@@ -1,9 +1,11 @@
 import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
+import { useAuth } from '../auth/AuthContext'
 import './jobAI.css'
 
 export default function Profile() {
   const DEV_HEADERS = { 'X-User-Id': '1' }
+  const { logout } = useAuth()
 
   const [editing, setEditing] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -165,6 +167,13 @@ export default function Profile() {
     } finally {
       setSaving(false)
     }
+  }
+
+  const handleLogout = () => {
+    // Clear any local data
+    localStorage.removeItem('resume_id')
+    // Call the auth context logout which clears token and redirects
+    logout()
   }
 
   return (
@@ -376,7 +385,21 @@ export default function Profile() {
               <section style={{ marginTop: '6px' }}>
                 <h5 style={{ margin: '0 0 8px 0', fontWeight: 700 }}>Security</h5>
                 <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                  <a href="#" id="changePassword" style={{ padding: '8px 10px', borderRadius: '8px', border: '1px solid var(--border)', background: 'transparent', color: 'var(--ink)' }}>Change password</a>
+                  <a href="#" id="changePassword" style={{ padding: '8px 10px', borderRadius: '8px', border: '1px solid var(--border)', background: 'transparent', color: 'var(--ink)', textDecoration: 'none' }}>Change password</a>
+                  <button 
+                    onClick={handleLogout}
+                    style={{ 
+                      padding: '8px 10px', 
+                      borderRadius: '8px', 
+                      border: '1px solid #dc2626', 
+                      background: 'transparent', 
+                      color: '#dc2626',
+                      cursor: 'pointer',
+                      fontWeight: 500
+                    }}
+                  >
+                    Logout
+                  </button>
                 </div>
               </section>
             </div>
