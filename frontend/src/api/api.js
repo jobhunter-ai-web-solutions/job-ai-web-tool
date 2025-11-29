@@ -1,8 +1,10 @@
 // src/api/api.js
 
 // Use Vite-provided env or sensible defaults. Prefer VITE_API_BASE when set.
+// Use Vite-provided env or sensible defaults. Prefer VITE_API_BASE when set.
 const API_BASE =
-  import.meta.env.VITE_API_BASE || (import.meta.env.PROD ? "https://api.yourdomain.com/api" : "http://localhost:5001/api");
+  import.meta.env.VITE_API_BASE ||
+  (import.meta.env.PROD ? "https://job-ai-web-tool.onrender.com/api" : "http://localhost:5001/api");
 
 // Helper: Handle errors & responses
 async function handleResponse(res) {
