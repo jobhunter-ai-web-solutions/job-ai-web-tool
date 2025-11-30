@@ -1,27 +1,19 @@
-# Job-AI Web Tool Project Structure
+# JobHunter.ai — What this demo does
 
-A small full-stack demo that helps job seekers find, save, and apply to jobs with AI-assisted tools (resume upload, job matching, and generated cover letters).
+JobHunter.ai is a lightweight demo that helps job seekers discover and manage job opportunities with a few helpful features powered by simple AI tools.
 
-Why this project
-- Combines job search with AI features to speed up applications.
-- Demonstrates a simple React + Vite frontend with a Flask backend (optional MySQL persistence).
+What you can do
+- Upload or paste a resume to get quick, tailored suggestions.
+- Search for jobs and view brief, matched recommendations.
+- Save jobs for later and mark jobs as applied.
+- Generate a draft cover letter from a job and your resume (optional AI feature).
 
-Key visitor-facing features
-- Browse AI-matched job recommendations.
-- View full job details in a modal.
-- Save jobs to your account and mark jobs as applied.
-- Upload or paste a resume to get tailored suggestions.
-- Generate a draft cover letter using the AI helper.
+Who this is for
+- Job seekers who want a quick way to find and organize opportunities.
 
-Get started (quick)
-- Try the demo locally (developer setup is in `README.DEV.md`).
-- For developers: see `README.DEV.md` for full setup, API examples, env variables and curl examples.
+Try the demo
+- To run the app locally or to see developer instructions, open `documents/README.DEV.md` (contains setup and API examples).
 
-Tech stack (high level)
-- Frontend: React, Vite
-- Backend: Flask (Python)
-- Optional: MySQL for persistence; in-memory fallback available for quick dev
-- AI: Configurable provider (Gemini) for cover-letter/chat features
 
 
 
