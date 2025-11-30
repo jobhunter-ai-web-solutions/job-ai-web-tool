@@ -1,4 +1,4 @@
-/* Theme variables (from public/assets/css/jobAI.css) */
+/* Theme variables and global base for app + landing */
 :root{
   --brand:#5ee1a2;
   --accent:#7ab6ff;
@@ -9,8 +9,8 @@
   --border:rgba(255,255,255,.06);
   --ring:0 6px 20px rgba(90,200,160,.08);
   /* Aliases for backward compatibility */
-  --card-bg: #0f141c;
-  --bg: var(--bg-0);
+  --card-bg:#0f141c;
+  --bg:var(--bg-0);
 }
 
 /* Base / Reset */
@@ -43,7 +43,7 @@ nav.sidebar a{
   padding:12px 24px;
   color:var(--ink);
   text-decoration:none;
-  transition:background .12s, color .12s;
+  transition:background .12s,color .12s;
 }
 nav.sidebar a:hover{background:rgba(94,225,162,.06);box-shadow:var(--ring)}
 
@@ -67,10 +67,10 @@ nav.sidebar a:hover{background:rgba(94,225,162,.06);box-shadow:var(--ring)}
   line-height:1.05;
   font-weight:700;
   margin:0 0 8px;
-  letter-spacing:0.2px;
+  letter-spacing:.2px;
 }
 @media (max-width:880px){
-  .container .page-title{ font-size:22px; }
+  .container .page-title{font-size:22px}
 }
 
 /* Card */
@@ -98,14 +98,22 @@ nav.sidebar a:hover{background:rgba(94,225,162,.06);box-shadow:var(--ring)}
   border-radius:12px;
   padding:48px 28px;
   text-align:center;
-  transition:border-color .12s, background .12s;
+  transition:border-color .12s,background .12s;
   cursor:pointer;
   background:transparent;
 }
-.border-dashed:hover{border-color:var(--brand);background:linear-gradient(180deg, rgba(94,225,162,0.02), transparent)}
+.border-dashed:hover{border-color:var(--brand);background:linear-gradient(180deg,rgba(94,225,162,.02),transparent)}
 
 /* Buttons */
-button{cursor:pointer;padding:10px 18px;border-radius:10px;background:var(--brand);color:#07120c;border:0;font-weight:600}
+button{
+  cursor:pointer;
+  padding:10px 18px;
+  border-radius:10px;
+  background:var(--brand);
+  color:#07120c;
+  border:0;
+  font-weight:600;
+}
 button:hover{box-shadow:var(--ring)}
 
 /* Muted text */
@@ -118,7 +126,7 @@ button:hover{box-shadow:var(--ring)}
   left:32px;
   background:#10131a;
   border-radius:50%;
-  box-shadow:0 2px 12px rgba(0,0,0,0.18);
+  box-shadow:0 2px 12px rgba(0,0,0,.18);
   width:56px;
   height:56px;
   display:flex;
@@ -126,12 +134,12 @@ button:hover{box-shadow:var(--ring)}
   justify-content:center;
   z-index:1000;
   border:2px solid var(--brand);
-  transition:box-shadow .2s, transform .12s;
+  transition:box-shadow .2s,transform .12s;
 }
 .chatbot-btn:hover{box-shadow:var(--ring);transform:translateY(-3px)}
-.chatbot-btn svg{width:28px;height:28px;color:var(--brand);}
+.chatbot-btn svg{width:28px;height:28px;color:var(--brand)}
 
-/* Filters inputs (light reusable styles) */
+/* Filters inputs */
 .filters{
   width:100%;
   max-width:960px;
@@ -172,24 +180,30 @@ button:hover{box-shadow:var(--ring)}
   -webkit-appearance:none;
   appearance:none;
   height:6px;
-  background:linear-gradient(90deg, var(--brand), var(--accent));
+  background:linear-gradient(90deg,var(--brand),var(--accent));
   border-radius:6px;
   outline:none;
   flex:1;
 }
 .range-input::-webkit-slider-thumb{
   -webkit-appearance:none;
-  width:18px;height:18px;border-radius:50%;
-  background:#07120c;border:3px solid var(--brand);
+  width:18px;
+  height:18px;
+  border-radius:50%;
+  background:#07120c;
+  border:3px solid var(--brand);
   box-shadow:0 2px 8px rgba(0,0,0,.35);
 }
 .range-input::-moz-range-thumb{
-  width:18px;height:18px;border-radius:50%;
-  background:#07120c;border:3px solid var(--brand);
+  width:18px;
+  height:18px;
+  border-radius:50%;
+  background:#07120c;
+  border:3px solid var(--brand);
   box-shadow:0 2px 8px rgba(0,0,0,.35);
 }
 
-/* Dual-thumb (single visual) slider */
+/* Dual-thumb slider */
 .double-range .range-track{position:relative}
 .double-range .track-bg{pointer-events:none}
 .double-range .track-fill{
@@ -203,8 +217,6 @@ button:hover{box-shadow:var(--ring)}
   left:0;
   width:0;
 }
-
-/* keep the existing range-thumb styling but ensure inputs are transparent and overlap */
 .double-range .range-input{
   -webkit-appearance:none;
   appearance:none;
@@ -218,23 +230,27 @@ button:hover{box-shadow:var(--ring)}
 .double-range .range-input::-webkit-slider-thumb{
   -webkit-appearance:none;
   appearance:none;
-  width:18px;height:18px;border-radius:50%;
-  background:#07120c;border:3px solid var(--brand);
+  width:18px;
+  height:18px;
+  border-radius:50%;
+  background:#07120c;
+  border:3px solid var(--brand);
   box-shadow:0 2px 8px rgba(0,0,0,.35);
   z-index:5;
 }
 .double-range .range-input::-moz-range-thumb{
-  width:18px;height:18px;border-radius:50%;
-  background:#07120c;border:3px solid var(--brand);
+  width:18px;
+  height:18px;
+  border-radius:50%;
+  background:#07120c;
+  border:3px solid var(--brand);
   box-shadow:0 2px 8px rgba(0,0,0,.35);
   z-index:5;
 }
-
-/* make sure the lower-value thumb is above the other for easier dragging */
 #salaryMin{z-index:4}
 #salaryMax{z-index:3}
 
-/* Auth page styles */
+/* Auth page */
 .auth-wrap{
   max-width:100%;
   padding:0 18px;
@@ -321,25 +337,25 @@ label{
   margin:0 auto;
 }
 
-/* Nav link/icon */
-.nav-link {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: white;
-  text-decoration: none;
-  padding: 8px 12px;
-  transition: color 0.2s ease;
+/* Nav link/icon (inside app layout) */
+.nav-link{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  color:white;
+  text-decoration:none;
+  padding:8px 12px;
+  transition:color .2s ease;
 }
-.nav-link .nav-icon {
-  width: 20px;
-  height: 20px;
-  stroke: currentColor;
+.nav-link .nav-icon{
+  width:20px;
+  height:20px;
+  stroke:currentColor;
 }
-.nav-link:hover { color: var(--brand); }
+.nav-link:hover{color:var(--brand)}
 
-/* Brand badges */
-.brand{
+/* Brand badges - scoped to the app layout so they don't override Home header */
+.app-row .brand{
   position:fixed;
   top:18px;
   left:18px;
@@ -355,15 +371,15 @@ label{
   border:none;
   box-shadow:0 6px 18px rgba(2,6,23,0.06);
 }
-.brand-dot{
+.app-row .brand-dot{
   width:10px;
   height:10px;
   border-radius:50%;
-  background: conic-gradient(from 0deg, var(--brand), var(--accent));
+  background:conic-gradient(from 0deg,var(--brand),var(--accent));
   display:inline-block;
   flex:0 0 10px;
 }
-.brand-right{
+.app-row .brand-right{
   position:fixed;
   top:18px;
   right:18px;
@@ -379,30 +395,32 @@ label{
   border:none;
   box-shadow:0 6px 18px rgba(2,6,23,0.06);
 }
-.brand-dot-right{
+.app-row .brand-dot-right{
   width:10px;
   height:10px;
   border-radius:50%;
-  background: conic-gradient(from 0deg, var(--brand), var(--accent));
+  background:conic-gradient(from 0deg,var(--brand),var(--accent));
   display:inline-block;
   flex:0 0 10px;
 }
 
-/* Ensure select dropdown options match the dark theme */
-select option {
-  background-color: var(--card-bg);
-  color: var(--ink);
+/* Dark select dropdown */
+select option{
+  background-color:var(--card-bg);
+  color:var(--ink);
 }
-
-/* Use a dark dropdown caret on supported browsers while keeping native feel */
-select {
-  -webkit-appearance: none;
-  appearance: none;
-  background-image: linear-gradient(45deg, transparent 50%, var(--ink) 50%), linear-gradient(135deg, var(--ink) 50%, transparent 50%);
-  background-position: calc(100% - 18px) calc(1em + 2px), calc(100% - 13px) calc(1em + 2px);
-  background-size: 6px 6px, 6px 6px;
-  background-repeat: no-repeat;
-  padding-right: 36px;
+select{
+  -webkit-appearance:none;
+  appearance:none;
+  background-image:
+    linear-gradient(45deg,transparent 50%,var(--ink) 50%),
+    linear-gradient(135deg,var(--ink) 50%,transparent 50%);
+  background-position:
+    calc(100% - 18px) calc(1em + 2px),
+    calc(100% - 13px) calc(1em + 2px);
+  background-size:6px 6px,6px 6px;
+  background-repeat:no-repeat;
+  padding-right:36px;
 }
 
 /* Responsive adjustments */
