@@ -1,6 +1,6 @@
 import { useState, useEffect} from 'react'
 import { Link } from 'react-router-dom'
-import { getAppliedJobs } from '../api/api'
+import { getAppliedJobs, getRecommendations, getJob } from '../api/api'
 import { deleteAppliedJob } from '../api/api'
 import './jobAI.css'
 
@@ -33,7 +33,53 @@ export default function AppliedJobs() {
     async function loadAppliedJobs() {
       try {
         const data = await getAppliedJobs()
-        setJobs(Array.isArray(data) ? data : [])
+        const fetched = Array.isArray(data) ? data : []
+        const resumeId = Number(localStorage.getItem('resume_id') || 0) || undefined
+
+        // Enrich applied job rows with full job details when possible (DB rows often omit description/skills)
+        let detailed = fetched
+        try {
+          detailed = await Promise.all(fetched.map(async (j) => {
+            // If description already present, keep as-is
+            if (j && (j.description || j.full_description)) return j
+            if (j && j.job_id) {
+              try {
+                const jobDetail = await getJob(j.job_id)
+                return { ...j, ...jobDetail }
+              } catch (err) {
+                return j
+              }
+            }
+            return j
+          }))
+        } catch (err) {
+          console.warn('Failed to enrich applied jobs with details', err)
+          detailed = fetched
+        }
+
+        if (resumeId && detailed.length) {
+          try {
+            const rec = await getRecommendations(resumeId, detailed, { use_field_aware: import.meta.env.DEV ? true : undefined })
+            if (rec && Array.isArray(rec.results)) {
+              const scoresById = {}
+              rec.results.forEach(r => {
+                if (r && (r.job_id || r.jobId || r.id) != null) scoresById[String(r.job_id || r.jobId || r.id)] = r
+              })
+              const withScores = detailed.map(j => ({
+                ...j,
+                score: (scoresById[String(j.job_id || j.jobId || j.id)] && Number(scoresById[String(j.job_id || j.jobId || j.id)].score)) ?? (j.score ?? j.matchScore ?? j.match_score ?? 0)
+              }))
+              setJobs(withScores)
+            } else {
+              setJobs(detailed)
+            }
+          } catch (e) {
+            console.error('Failed to fetch recommendations for applied jobs', e)
+            setJobs(detailed)
+          }
+        } else {
+          setJobs(detailed)
+        }
       } catch (err) {
         console.error('Error fetching applied jobs', err)
         setJobs([])
@@ -98,7 +144,7 @@ export default function AppliedJobs() {
               </Link>
             </li>
             <li><Link to="/resume_upload">Upload Resume</Link></li>
-            <li><Link to="/matchedAI">AI Matched Jobs</Link></li>
+            <li><Link to="/matchedAI">Search</Link></li>
             <li><Link to="/savedJobs">Saved Jobs</Link></li>
             <li><Link to="/appliedJobs">Applied Jobs</Link></li>
             <li><Link to="/profile">Profile</Link></li>
@@ -121,7 +167,7 @@ export default function AppliedJobs() {
               <p style={{ margin: '0 0 8px' }}>You haven't applied to any jobs yet.</p>
               <p style={{ margin: '0' }}>
                 <Link to="/matchedAI" style={{ color: 'var(--brand)', textDecoration: 'none' }}>
-                  Browse matched jobs →
+                  Browse search results →
                 </Link>
               </p>
             </div>
@@ -161,28 +207,7 @@ function JobCard({job, formatSalary, onRemove}) {
             <p data-slot="card-description">{job.company || job.company_name} {job.type ? `• ${job.type}` : ''}</p>
 
             <div className="text-muted-foreground" style={{marginTop:6}}>
-              {(() => {
-                const r = job?.raw || {};
-                const loc = job?.location || (r.location && (r.location.display_name || r.location.area)) || '';
-                const created = r.created || r.created_at || r.date || r.created_date || job?.created || job?.posted_at;
-                let days = null;
-                if (created) {
-                  const d = new Date(created);
-                  if (!isNaN(d)) {
-                    days = Math.floor((Date.now() - d.getTime()) / (1000 * 60 * 60 * 24));
-                  }
-                }
-                const timeVal = r.Time ?? job?.time ?? job?.posted_days;
-                return (
-                  <>
-                    <div className="location"><strong>Location:</strong> {loc || 'N/A'}</div>
-                    <div className="days-posted"><strong>Days Posted:</strong> {days !== null ? `${days} day${days === 1 ? '' : 's'}` : (timeVal || timeVal === 0 ? String(timeVal) : 'N/A')}</div>
-                  </>
-                )
-              })()}
-
-              <div className="salary-range"><strong>Salary:</strong> {formatSalary(job.salaryMin)} - {formatSalary(job.salaryMax)}</div>
-              <div className='job-experience'><strong>Experience:</strong> {job.experience}</div>
+              <div className="location"><strong>Location:</strong> {job?.location || (job?.raw && (job.raw.location?.display_name || job.raw.location?.area)) || 'N/A'}</div>
             </div>
           </div>
 

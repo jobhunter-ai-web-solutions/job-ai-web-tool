@@ -2,7 +2,7 @@ import { useState, useEffect} from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import './jobAI.css'
-import { getSavedJobs, deleteSavedJob, applyJob } from '../api/api'
+import { getSavedJobs, deleteSavedJob, applyJob, getRecommendations } from '../api/api'
 
 const formatSalary = (val) => `$${Math.round((val || 0) / 1000)}k`
 
@@ -57,7 +57,32 @@ export default function SavedJobs() {
     try {
       const data = await getSavedJobs()
       // backend returns an array of rows; normalize if needed
-      setJobs(Array.isArray(data) ? data : (data.results || []))
+      const fetched = Array.isArray(data) ? data : (data.results || [])
+      // If a resume is uploaded, request recommendation scores for these jobs
+      const resumeId = Number(localStorage.getItem('resume_id') || 0) || undefined
+      if (resumeId && fetched.length) {
+        try {
+          const rec = await getRecommendations(resumeId, fetched, { use_field_aware: import.meta.env.DEV ? true : undefined })
+          if (rec && Array.isArray(rec.results)) {
+            const scoresById = {}
+            rec.results.forEach(r => {
+              if (r && (r.job_id || r.jobId || r.id) != null) scoresById[String(r.job_id || r.jobId || r.id)] = r
+            })
+            const withScores = fetched.map(j => ({
+              ...j,
+              score: (scoresById[String(j.job_id || j.jobId || j.id)] && Number(scoresById[String(j.job_id || j.jobId || j.id)].score)) ?? (j.score ?? j.matchScore ?? j.match_score ?? 0)
+            }))
+            setJobs(withScores)
+          } else {
+            setJobs(fetched)
+          }
+        } catch (e) {
+          console.error('Failed to fetch recommendations for saved jobs', e)
+          setJobs(fetched)
+        }
+      } else {
+        setJobs(fetched)
+      }
     } catch (err) {
       console.error('getSavedJobs failed', err)
       setError(String(err?.message || err || 'Failed to load saved jobs'))
@@ -117,7 +142,7 @@ export default function SavedJobs() {
               </Link>
             </li>
             <li><Link to="/resume_upload">Upload Resume</Link></li>
-            <li><Link to="/matchedAI">AI Matched Jobs</Link></li>
+            <li><Link to="/matchedAI">Search</Link></li>
             <li><Link to="/savedJobs">Saved Jobs</Link></li>
             <li><Link to="/appliedJobs">Applied Jobs</Link></li>
             <li><Link to="/profile">Profile</Link></li>
@@ -147,8 +172,8 @@ export default function SavedJobs() {
                   <p style={{ margin: '0 0 8px' }}>No saved jobs yet.</p>
                   <p style={{ margin: '0' }}>
                     <Link to="/matchedAI" style={{ color: 'var(--brand)', textDecoration: 'none' }}>
-                      Browse matched jobs →
-                    </Link>
+                        Browse search results →
+                      </Link>
                   </p>
                 </div>
               )}
@@ -175,28 +200,7 @@ function JobCard({job, formatSalary, onRemove, onApply}) {
             <p data-slot="card-description">{job.company || job.company_name} {job.type ? `• ${job.type}` : ''}</p>
 
             <div className="text-muted-foreground" style={{marginTop:6}}>
-              {(() => {
-                const r = job?.raw || {};
-                const loc = job?.location || (r.location && (r.location.display_name || r.location.area)) || '';
-                const created = r.created || r.created_at || r.date || r.created_date || job?.created || job?.posted_at;
-                let days = null;
-                if (created) {
-                  const d = new Date(created);
-                  if (!isNaN(d)) {
-                    days = Math.floor((Date.now() - d.getTime()) / (1000 * 60 * 60 * 24));
-                  }
-                }
-                const timeVal = r.Time ?? job?.time ?? job?.posted_days;
-                return (
-                  <>
-                    <div className="location"><strong>Location:</strong> {loc || 'N/A'}</div>
-                    <div className="days-posted"><strong>Days Posted:</strong> {days !== null ? `${days} day${days === 1 ? '' : 's'}` : (timeVal || timeVal === 0 ? String(timeVal) : 'N/A')}</div>
-                  </>
-                )
-              })()}
-
-              <div className="salary-range"><strong>Salary:</strong> {formatSalary(job.salaryMin)} - {formatSalary(job.salaryMax)}</div>
-              <div className='job-experience'><strong>Experience:</strong> {job.experience}</div>
+              <div className="location"><strong>Location:</strong> {job?.location || (job?.raw && (job.raw.location?.display_name || job.raw.location?.area)) || 'N/A'}</div>
             </div>
           </div>
 
