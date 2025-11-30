@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react'
 import DOMPurify from 'dompurify'
 import { Link } from 'react-router-dom'
 import './jobAI.css'
-import { searchJobs, getRecommendations, generateCoverLetter, saveJob, applyJob, getJob } from '../api/api'
+import { searchJobs, getRecommendations, generateCoverLetter, saveJob, applyJob, getJob, getAppliedJobs } from '../api/api'
 
 export default function MatchedAI() {
   useEffect(() => { document.title = 'AI Matched Jobs – jobhunter.ai' }, [])
@@ -31,6 +31,17 @@ export default function MatchedAI() {
   const [filterAppliedButNoResults, setFilterAppliedButNoResults] = useState(false)
   const [unfilteredTotalResults, setUnfilteredTotalResults] = useState(null)
   const [copyStatus, setCopyStatus] = useState('')
+  const [appliedJobIds, setAppliedJobIds] = useState(new Set())
+
+  // Debug: Log when appliedJobIds changes
+  useEffect(() => {
+    console.log('appliedJobIds state updated:', Array.from(appliedJobIds))
+  }, [appliedJobIds])
+
+  // Helper function to check if a job is applied
+  const isJobApplied = useCallback((jobId) => {
+    return appliedJobIds.has(String(jobId))
+  }, [appliedJobIds])
 
   const formatSalary = (val) => `$${Math.round((val || 0) / 1000)}k`
 
@@ -52,6 +63,51 @@ export default function MatchedAI() {
     return expLevel
   }
 
+  const refreshAppliedJobs = useCallback(async () => {
+    try {
+      const data = await getAppliedJobs()
+      console.log('refreshAppliedJobs - Raw data from server:', data)
+      // server-provided applied rows should be authoritative
+      const serverIds = new Set(
+        (Array.isArray(data) ? data : [])
+          .filter(row => row && row.job_id != null)
+          .map(row => String(row.job_id))
+      )
+      console.log('refreshAppliedJobs - Setting appliedJobIds:', Array.from(serverIds))
+      setAppliedJobIds(serverIds)
+    } catch (err) {
+      console.error('Failed to load applied jobs', err)
+      setAppliedJobIds(new Set())
+    }
+  }, [])
+
+
+  useEffect(() => {
+    refreshAppliedJobs()
+    
+    // Listen for changes from AppliedJobs tab (when jobs are deleted)
+    const handleAppliedJobsChange = (event) => {
+      if (event.detail?.action === 'removed' && event.detail?.job_id) {
+        // Remove from local applied set
+        setAppliedJobIds((prev) => {
+          const next = new Set(prev)
+          next.delete(String(event.detail.job_id))
+          return next
+        })
+        // Update jobs list to remove applied flag
+        setJobs((prev) => prev.map((j) => 
+          j.job_id === event.detail.job_id ? { ...j, applied: false } : j
+        ))
+      }
+    }
+    
+    window.addEventListener('appliedJobsChanged', handleAppliedJobsChange)
+    
+    return () => {
+      window.removeEventListener('appliedJobsChanged', handleAppliedJobsChange)
+    }
+  }, [refreshAppliedJobs])
+
   const fetchJobs = useCallback(async (opts = {}) => {
     const payload = {
       query: opts.query ?? searchQuery ?? 'data analyst',
@@ -67,6 +123,7 @@ export default function MatchedAI() {
     }
 
     try {
+      // Fetch search results
       const data = await searchJobs(payload)
 
       const mapped = (data.results || []).map((j) => ({
@@ -77,7 +134,36 @@ export default function MatchedAI() {
         salaryMax: Number.isFinite(j.salaryMax) ? j.salaryMax : null,
       }))
 
-      setJobs(mapped)
+      // ALWAYS fetch fresh applied jobs from server to ensure button state is correct
+      let appliedIds = new Set()
+      try {
+        const appliedData = await getAppliedJobs()
+        const appliedArray = Array.isArray(appliedData) ? appliedData : []
+        
+        // Extract all applied job IDs and update the Set
+        appliedIds = new Set(
+          appliedArray
+            .filter(row => row && row.job_id != null)
+            .map(row => String(row.job_id))
+        )
+        
+        // Update state immediately - this is the source of truth
+        setAppliedJobIds(appliedIds)
+        
+        console.log('Applied job IDs from server:', Array.from(appliedIds))
+      } catch (err) {
+        console.error('Failed to fetch applied jobs in fetchJobs', err)
+        // If fetch fails, keep current state
+        appliedIds = appliedJobIds
+      }
+
+      // Mark jobs with applied flag based on server data
+      const mergedJobs = mapped.map((job) => ({
+        ...job,
+        applied: appliedIds.has(String(job.job_id))
+      }))
+
+      setJobs(mergedJobs)
 
       if (data) {
         setPage(Number(data.page || 1));
@@ -111,6 +197,13 @@ export default function MatchedAI() {
 
   useEffect(() => { fetchJobs({ query: searchQuery, page }) }, [fetchJobs, page, searchQuery])
 
+  // Debug: log selected job when modal opens to help diagnose missing fields
+  useEffect(() => {
+    if (jobModalOpen) {
+      console.debug('Job modal opened, selectedJob=', selectedJob)
+    }
+  }, [jobModalOpen, selectedJob])
+
   // Generate cover letter for a selected job and show modal
   const handleGenerateCoverLetter = async (job) => {
     setSelectedJob(job)
@@ -142,7 +235,12 @@ export default function MatchedAI() {
     // If job_id present, fetch fresh details from backend
     if (job && job.job_id) {
       getJob(job.job_id).then((data) => {
-        setSelectedJob(data)
+        // Preserve any known applied state from the current list
+        const knownApplied = jobs.find((j) => j.job_id === data.job_id)?.applied
+        // Also preserve the original raw provider payload (Adzuna) when available
+        const rawFromList = job && job.raw ? job.raw : undefined
+        const merged = rawFromList ? { ...data, raw: rawFromList } : data
+        setSelectedJob(knownApplied ? { ...merged, applied: true } : merged)
       }).catch((err) => {
         console.error('getJob failed', err)
         // fall back to using provided job object
@@ -173,11 +271,33 @@ export default function MatchedAI() {
   }
 
   const handleApplyJob = async (job) => {
+    if (!job || !job.job_id) return
     setJobActionLoading(true)
     setJobModalMessage('')
     try {
       await applyJob(job.job_id)
       setJobModalMessage('Marked as applied')
+      
+      // Update applied IDs set first (this controls button state)
+      setAppliedJobIds((prev) => {
+        const next = new Set(prev)
+        next.add(String(job.job_id))
+        return next
+      })
+      
+      // Update local jobs state so UI reflects applied status
+      setJobs((prev) => prev.map((j) => (j.job_id === job.job_id ? { ...j, applied: true } : j)))
+      
+      // If the job is currently selected in the modal, update that too
+      setSelectedJob((s) => (s && s.job_id === job.job_id ? { ...s, applied: true } : s))
+      
+      // Notify other tabs/components that applied jobs changed
+      window.dispatchEvent(new CustomEvent('appliedJobsChanged', { 
+        detail: { action: 'added', job_id: job.job_id } 
+      }))
+      
+      // Refresh applied jobs from server to ensure consistency
+      await refreshAppliedJobs()
     } catch (err) {
       console.error('applyJob failed', err)
       setJobModalMessage(String(err?.message || 'Failed to apply to job'))
@@ -185,6 +305,7 @@ export default function MatchedAI() {
       setJobActionLoading(false)
     }
   }
+
 
   const filterJobs = useMemo(() => {
     return jobs.filter((j) => {
@@ -437,6 +558,7 @@ v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c
                 onSave={() => handleSaveJob(job)}
                 onApply={() => handleApplyJob(job)}
                 onGenerateCover={() => handleGenerateCoverLetter(job)}
+                isApplied={appliedJobIds.has(String(job.job_id))}
               />
             ))}
           </section>
@@ -476,7 +598,32 @@ v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c
                     </div>
                   </div>
                   <div style={{ marginTop: 12 }}>
-                    <div style={{ color: 'var(--muted)' }}>{selectedJob?.location} {selectedJob?.type ? `• ${selectedJob?.type}` : ''}</div>
+                    <div style={{ color: 'var(--muted)', lineHeight: 1.4 }}>
+                      {(() => {
+                        const r = selectedJob?.raw || {};
+                        const loc = selectedJob?.location || (r.location && (r.location.display_name || r.location.area)) || '';
+
+                        const created = r.created || r.created_at || r.date || r.created_date || selectedJob?.created || selectedJob?.posted_at;
+                        let days = null;
+                        if (created) {
+                          const d = new Date(created);
+                          if (!isNaN(d)) {
+                            days = Math.floor((Date.now() - d.getTime()) / (1000 * 60 * 60 * 24));
+                          }
+                        }
+
+                        const timeVal = r.Time ?? selectedJob?.time ?? selectedJob?.posted_days;
+
+                        return (
+                          <div>
+                            <div><strong>Location:</strong> {loc || 'N/A'}</div>
+                            <div>
+                              <strong>Days Posted:</strong> {days !== null ? `${days} day${days === 1 ? '' : 's'}` : (timeVal || timeVal === 0 ? String(timeVal) : 'N/A')}{selectedJob?.type ? ` • ${selectedJob.type}` : ''}
+                            </div>
+                          </div>
+                        )
+                      })()}
+                    </div>
                     <div style={{ marginTop: 12 }}>
                       {selectedJob?.full_description || selectedJob?.description ? (
                         <div style={{ lineHeight: 1.5 }} dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(selectedJob?.full_description || selectedJob?.description || '') }} />
@@ -484,7 +631,17 @@ v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c
                     </div>
                     <div style={{ marginTop: 12, display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
                       <button onClick={() => handleSaveJob(selectedJob)} disabled={jobActionLoading}>Save</button>
-                      <button onClick={() => handleApplyJob(selectedJob)} disabled={jobActionLoading}>Apply</button>
+                      <button
+                        onClick={() => handleApplyJob(selectedJob)}
+                        disabled={
+                          jobActionLoading ||
+                          (selectedJob && appliedJobIds.has(String(selectedJob.job_id)))
+                        }
+                      >
+                        {selectedJob && appliedJobIds.has(String(selectedJob.job_id))
+                          ? 'Confirmed'
+                          : 'Confirm Applied'}
+                      </button>
                       <button onClick={() => { if (!jobActionLoading) { closeJobModal(); handleGenerateCoverLetter(selectedJob); } }}>Cover Letter</button>
                       <a href={selectedJob?.url || selectedJob?.url || '#'} target="_blank" rel="noreferrer"><button>Open Original</button></a>
                     </div>
@@ -557,19 +714,45 @@ v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c
   )
 }
 
-function JobCard({job, formatSalary, onView, onSave, onApply, onGenerateCover}) {
+function JobCard({job, formatSalary, onView, onSave, onApply, onGenerateCover, isApplied}) {
+  console.log('JobCard render:', {
+    job_id: job.job_id,
+    title: job.title,
+    isApplied: isApplied,
+    applied_flag: job.applied
+  })
   return (
     <div data-slot="card" className="bg-card text-card-foreground border" style={{padding: '12px 16px'}}>
       <div data-slot="card-header" style={{textAlign: 'left'}}>
         <div style={{display:'flex', justifyContent:'space-between', gap:12, alignItems:'flex-start'}}>
           <div style={{minWidth:0}}>
             <h4 data-slot="card-title" style={{margin:0}}>{job.title}</h4>
-            <p data-slot="card-description">{job.company} · {job.location} {job.type ? `• ${job.type}` : ''}</p>
+            <p data-slot="card-description">{job.company} {job.type ? `• ${job.type}` : ''}</p>
 
             <div className="text-muted-foreground" style={{marginTop:6}}>
-              <div className="skills">Skills: {Array.isArray(job.skills) ? job.skills.join(', ') : (job.skills || '')}</div>
-              <div className="salary-range">Salary: {formatSalary(job.salaryMin)} - {formatSalary(job.salaryMax)}</div>
-              <div className='job-experience'>Experience: {job.experience}</div>
+              {(() => {
+                const r = job?.raw || {};
+                const loc = job?.location || (r.location && (r.location.display_name || r.location.area)) || '';
+                const created = r.created || r.created_at || r.date || r.created_date || job?.created || job?.posted_at;
+                let days = null;
+                if (created) {
+                  const d = new Date(created);
+                  if (!isNaN(d)) {
+                    days = Math.floor((Date.now() - d.getTime()) / (1000 * 60 * 60 * 24));
+                  }
+                }
+                const timeVal = r.Time ?? job?.time ?? job?.posted_days;
+
+                return (
+                  <>
+                    <div className="location"><strong>Location:</strong> {loc || 'N/A'}</div>
+                    <div className="days-posted"><strong>Days Posted:</strong> {days !== null ? `${days} day${days === 1 ? '' : 's'}` : (timeVal || timeVal === 0 ? String(timeVal) : 'N/A')}</div>
+                  </>
+                )
+              })()}
+
+              <div className="salary-range"><strong>Salary:</strong> {formatSalary(job.salaryMin)} - {formatSalary(job.salaryMax)}</div>
+              <div className='job-experience'><strong>Experience:</strong> {job.experience}</div>
             </div>
           </div>
 
@@ -583,9 +766,14 @@ function JobCard({job, formatSalary, onView, onSave, onApply, onGenerateCover}) 
   <div data-slot="card-content">
         <div style={{ display:'flex', gap:8, justifyContent:'flex-end', paddingTop:6}}>
           <button onClick={() => onView && onView()}>View</button>
-          <button onClick={() => onSave && onSave()}>Save</button>
-          <button onClick={() => onApply && onApply()}>Apply</button>
-          <button onClick={() => onGenerateCover && onGenerateCover()}>Cover Letter</button>
+        <button onClick={() => onSave && onSave()}>Save</button>
+        <button
+          onClick={() => !isApplied && onApply && onApply()}
+          disabled={isApplied}
+        >
+          {isApplied ? 'Confirmed' : 'Confirm Applied'}
+        </button>
+        <button onClick={() => onGenerateCover && onGenerateCover()}>Cover Letter</button>
         </div>
       </div>
     </div>

@@ -4,6 +4,9 @@ import os, re, json, random, string
 import requests
 from datetime import datetime, timezone 
 from typing import Any, Dict, List, Tuple
+import base64
+import bcrypt
+import jwt
 
 import sys, os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -16,13 +19,13 @@ import pdfplumber
 from io import BytesIO
 import html as _html
 
-from flask import Flask, request, jsonify, make_response
+from flask import Flask, request, jsonify, make_response, g
 from flask_cors import CORS
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from dotenv import load_dotenv
 
-# Optional MySQL
+# MySQL
 import mysql.connector
 from werkzeug.utils import secure_filename
 from werkzeug.exceptions import HTTPException
@@ -33,9 +36,22 @@ import bcrypt
 import jwt
 from datetime import timedelta
 
-# -----------------------------
-# Env & app
-# -----------------------------
+# ML Microservice configuration
+ML_SERVICE_URL = os.getenv("ML_SERVICE_URL", "http://localhost:8002").rstrip("/")
+ML_TIMEOUT = int(os.getenv("ML_TIMEOUT", "20"))
+
+def ml_post(path: str, payload: dict):
+    """Send POST request to ML microservice."""
+    url = f"{ML_SERVICE_URL}/{path.lstrip('/')}"
+    try:
+        r = requests.post(url, json=payload, timeout=ML_TIMEOUT)
+        r.raise_for_status()
+        return r.json()
+    except Exception as e:
+        app.logger.error(f"[ML ERROR] {e}")
+        raise
+
+# Environment Loading & Flask App Setup
 load_dotenv()
 app = Flask(__name__)
 # Rate Limiter (security)
@@ -46,33 +62,45 @@ limiter = Limiter(
 )
 
 
-# Config: allow configuring how many characters of job description to return
+# General App Config
 JOB_DESCRIPTION_MAX_CHARS = int(os.getenv("JOB_DESCRIPTION_MAX_CHARS", "2000"))
 
-# Log whether Adzuna creds are available (do not print the secrets)
+# Logging: External API Credentials
 if os.getenv("ADZUNA_APP_ID") and os.getenv("ADZUNA_APP_KEY"):
     app.logger.info("Adzuna credentials found in environment")
 else:
     app.logger.warning(
-        "Adzuna credentials not found in environment; "
-        "set ADZUNA_APP_ID and ADZUNA_APP_KEY in .env or env"
+        "Adzuna credentials missing — set ADZUNA_APP_ID and ADZUNA_APP_KEY"
     )
 
-# CORS allowlist (env) or permissive for dev
+# CORS Configuration
 _allow = os.getenv("CORS_ALLOW_ORIGINS", "")
+# Convert comma separated list into python list
 origins = [o.strip() for o in _allow.split(",") if o.strip()]
 
-# Always give Flask-CORS a list (never None)
+# Default for dev
 if not origins:
-    origins = ["*"]  # Allow all for local dev
+    origins = [
+        "http://localhost:5173", 
+        "http://127.0.0.1:5173", 
+        "http://localhost:3000"
+    ]
+
+CORS(
+    app,
+    resources={r"/api/*": {"origins": origins}},
+    supports_credentials=True,
+    expose_headers=["Content-Type", "Authorization"],
+)
 
 # JWT Utilities
 JWT_SECRET = os.getenv("JWT_SECRET")
 if not JWT_SECRET:
     raise RuntimeError("JWT_SECRET is not set. Add it to your environment variables.")
 JWT_ALGO = "HS256"
-JWT_EXPIRE_MINUTES = 30     # access token duartion
+JWT_EXPIRE_MINUTES = 30
 
+# Global Error Handlers
 @app.errorhandler(413)
 def too_large(e):
     return bad("File too large (max 5MB)", 413)
@@ -84,7 +112,6 @@ def handle_uncaught(e):
     app.logger.exception("Unhandled exception", exc_info=e)
     return bad("Server error", 500)
 
-CORS(app, origins=origins, supports_credentials=True)
 
 # -----------------------------
 # Gemini config
@@ -99,36 +126,93 @@ else:
     app.logger.warning("GEMINI_API_KEY not set; /api/chat will return an error")
 
 # -----------------------------
-# DB helpers (uses your global connection style, but with safe fallback)
+# DB helpers (uses thread-local Flask 'g' for connection safety)
 # -----------------------------
 USE_DB = all(os.getenv(k) for k in ["DB_HOST", "DB_USER", "DB_NAME"])
-_db = None
-_cursor = None
 
 
 def get_db():
-    global _db, _cursor
+    """
+    Prefer PyMySQL connection when available (pure-Python, robust).
+    Fall back to mysql-connector-python if PyMySQL is not installed or fails.
+    Returns (db_conn, cursor) or (None, None) on failure.
+    
+    Uses Flask's 'g' object for thread-local storage to avoid thread-safety issues.
+    """
     if not USE_DB:
         return None, None
+
+    # Check if we have a thread-local connection
+    if hasattr(g, '_db') and g._db is not None:
+        try:
+            # Test if connection is still alive
+            if hasattr(g._db, "ping"):
+                # pymysql exposes ping(reconnect=True) - auto-reconnect!
+                try:
+                    g._db.ping(reconnect=True)  # Auto-reconnect if connection lost
+                except TypeError:
+                    # some connectors have different signature
+                    g._db.ping()
+            elif hasattr(g._db, "is_connected"):
+                if not g._db.is_connected():
+                    raise Exception("stale connection")
+            return g._db, g._cursor
+        except Exception as e:
+            # Connection is dead and couldn't reconnect, log and clear
+            app.logger.warning(f"DB connection lost, reconnecting: {e}")
+            try:
+                g._db.close()
+            except Exception:
+                pass
+            g._db = None
+            g._cursor = None
+
+    # Try PyMySQL first (pure-Python, avoids mysql_native_password .so issues)
     try:
-        if _db is None or not _db.is_connected():
-            _db = mysql.connector.connect(
-                host=os.getenv("DB_HOST"),
-                user=os.getenv("DB_USER"),
-                password=os.getenv("DB_PASSWORD"),
-                database=os.getenv("DB_NAME"),
-                autocommit=True,
-                use_pure=True,
-            )
-            _cursor = _db.cursor(dictionary=True)
-        return _db, _cursor
+        import pymysql
+        import pymysql.cursors
+
+        g._db = pymysql.connect(
+            host=os.getenv("DB_HOST"),
+            user=os.getenv("DB_USER"),
+            password=os.getenv("DB_PASSWORD"),
+            db=os.getenv("DB_NAME"),
+            cursorclass=pymysql.cursors.DictCursor,
+            autocommit=True,
+        )
+        g._cursor = g._db.cursor()
+        app.logger.info("Connected to MySQL via PyMySQL (thread-local)")
+        return g._db, g._cursor
+    except Exception as e_py:
+        app.logger.info(f"PyMySQL connect failed (will try mysql-connector): {e_py}")
+
+    # Fallback: try mysql-connector (use_pure=True) as before
+    try:
+        g._db = mysql.connector.connect(
+            host=os.getenv("DB_HOST"),
+            user=os.getenv("DB_USER"),
+            password=os.getenv("DB_PASSWORD"),
+            database=os.getenv("DB_NAME"),
+            autocommit=True,
+            use_pure=True,
+        )
+        g._cursor = g._db.cursor(dictionary=True)
+        app.logger.info("Connected to MySQL via mysql-connector-python (thread-local)")
+        return g._db, g._cursor
     except Exception as e:
         app.logger.warning(f"MySQL unavailable, using memory store. Error: {e}")
         return None, None
 
 
-# Try to connect once at startup
-# get_db()
+@app.teardown_appcontext
+def close_db(exception=None):
+    """Close the database connection at the end of each request."""
+    db = g.pop('_db', None)
+    if db is not None:
+        try:
+            db.close()
+        except Exception:
+            pass
 
 # -----------------------------
 # Resume Upload Helpers
@@ -291,6 +375,62 @@ def _parse_plain_text_with_pre_llm(text: str):
         "sections": sections,
         "contacts": contacts,
     }
+
+
+# Lightweight RAKE-like extractor (no external deps)
+_RAKE_STOPWORDS = set(
+    [
+        "a","an","and","the","or","for","to","of","in","on","with","is","are",
+        "at","by","be","from","as","that","this","we","you","your","our","us",
+    ]
+)
+
+def _candidate_phrases(text: str) -> List[str]:
+    words = re.split(r"\s+", (text or "").lower())
+    phrases = []
+    cur = []
+    for w in words:
+        w = re.sub(r"[^a-z0-9+-]", "", w)
+        if not w:
+            if cur:
+                phrases.append(" ".join(cur))
+                cur = []
+            continue
+        if w in _RAKE_STOPWORDS:
+            if cur:
+                phrases.append(" ".join(cur))
+                cur = []
+            continue
+        cur.append(w)
+    if cur:
+        phrases.append(" ".join(cur))
+    # dedupe while preserving order
+    seen = set()
+    out = []
+    for p in phrases:
+        if p and p not in seen:
+            seen.add(p)
+            out.append(p)
+    return out
+
+
+def _rake_score_phrases(cands: List[str]) -> List[Tuple[str, float]]:
+    scores = []
+    for p in cands:
+        toks = [t for t in re.split(r"\W+", p) if t]
+        # score by length and uniqueness
+        score = len(toks) + 0.1 * len(set(toks))
+        scores.append((p, score))
+    scores.sort(key=lambda x: x[1], reverse=True)
+    return scores
+
+
+def _rake_extract(text: str, top_n: int = 8) -> List[str]:
+    if not text:
+        return []
+    cands = _candidate_phrases(text)
+    scored = _rake_score_phrases(cands)
+    return [p for p, s in scored[:top_n]]
 
 def _get_resume_record(resume_id: int):
     """Fetch resume text, parsed sections, and parsed contacts."""
@@ -468,19 +608,30 @@ def upload_resume():
 
     content = file.read() or b""
 
-    parsed = None
+    # Shared payload for ML service
+    safe_name = secure_filename(fname)
+    payload = {
+        "file_b64": base64.b64encode(content).decode("utf-8"),
+        "filename": safe_name,
+    }
+
     if mime == "application/pdf":
-        parsed = _parse_pdf_with_pre_llm(content)
-        text = parsed["cleaned_text"]
+        parsed = ml_post("parse-resume", payload)
+        text = parsed.get("cleaned_text", "")
+
     elif mime == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
         result = mammoth.extract_raw_text(BytesIO(content))
         raw = (result.value or "").strip()
-        parsed = _parse_plain_text_with_pre_llm(raw)
+        payload["raw_text"] = raw
+        parsed = ml_post("parse-resume", payload)
         text = parsed["cleaned_text"]
+
     else:  # text/plain
         raw = content.decode("utf-8", errors="ignore")
-        parsed = _parse_plain_text_with_pre_llm(raw)
+        payload["raw_text"] = raw
+        parsed = ml_post("parse-resume", payload)
         text = parsed["cleaned_text"]
+
 
     meta_blob = {}
     if parsed:
@@ -599,17 +750,28 @@ def resume_replace_existing(rid: int):
     content = f.read() or b""
 
     parsed = None
+    safe_name = secure_filename(f.filename)
+
+    payload = {
+        "file_b64": base64.b64encode(content).decode("utf-8"),
+        "filename": safe_name,
+    }
+
     if mime == "application/pdf":
-        parsed = _parse_pdf_with_pre_llm(content)
-        text = parsed["cleaned_text"]
+        parsed = ml_post("parse-resume", payload)
+        text = parsed.get("cleaned_text", "")
+
     elif mime == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
         result = mammoth.extract_raw_text(BytesIO(content))
         raw = (result.value or "").strip()
-        parsed = _parse_plain_text_with_pre_llm(raw)
+        payload["raw_text"] = raw
+        parsed = ml_post("parse-resume", payload)
         text = parsed["cleaned_text"]
+
     else:  # text/plain
         raw = content.decode("utf-8", errors="ignore")
-        parsed = _parse_plain_text_with_pre_llm(raw)
+        payload["raw_text"] = raw
+        parsed = ml_post("parse-resume", payload)
         text = parsed["cleaned_text"]
 
     safe_name = secure_filename(f.filename)
@@ -1068,6 +1230,7 @@ def jobs_search():
     ## Iterate over each job result
     for job in data.get("results", []):
         job_id = None
+        adzuna_id = job.get("id")  # Adzuna's unique job ID
         title = job.get("title")
         company = job.get("company", {}).get("display_name")
         location_name = job.get("location", {}).get("display_name")
@@ -1085,24 +1248,31 @@ def jobs_search():
         exp_text = f"{title or ''} {description or ''}"
         experience_level = extract_experience_level_helper(exp_text)
 
-        ## UPSERT (insert or update existing)
+        ## UPSERT (insert or update existing based on external_id from Adzuna)
         if db:
             try:
+                # Use external_id (Adzuna ID) as the primary matching key
+                # This ensures the same job gets the same job_id across searches
                 cursor.execute(
                     '''
-                    INSERT INTO jobs (title, company_name, industry, description, location, salary_range, source, url)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    INSERT INTO jobs (external_id, title, company_name, industry, description, location, salary_range, source, url)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON DUPLICATE KEY UPDATE
+                        title = VALUES(title),
+                        company_name = VALUES(company_name),
                         description = VALUES(description),
                         salary_range = VALUES(salary_range),
+                        url = VALUES(url),
                         posted_at = CURRENT_TIMESTAMP
                     ''',
-                    (title, company, category, description, location_name, f"{salary_min}-{salary_max}", source, url_job)
+                    (adzuna_id, title, company, category, description, location_name, f"{salary_min}-{salary_max}", source, url_job)
                 )
-                cursor.execute("SELECT job_id FROM jobs WHERE title=%s AND company_name=%s AND location=%s AND url=%s",
-                               (title, company, location_name, url_job))
-                job_id = cursor.fetchone()["job_id"]
-                job_ids.append(job_id)
+                # Get the job_id (either newly inserted or existing)
+                cursor.execute("SELECT job_id FROM jobs WHERE external_id = %s", (adzuna_id,))
+                result = cursor.fetchone()
+                if result:
+                    job_id = result["job_id"]
+                    job_ids.append(job_id)
             except Exception as e:
                 app.logger.warning(f"Job UPSERT failed: {e}")
 
@@ -1164,7 +1334,8 @@ def jobs_search():
 
         ## Return clean job JSON
         results.append({
-            "job_id": job_id,
+            "job_id": job_id,  # Database auto-increment ID
+            "adzuna_id": adzuna_id,  # Adzuna's external ID
             "title": title,
             "company": company,
             "location": location_name,
@@ -1182,11 +1353,6 @@ def jobs_search():
             "raw": job,
         })
 
-
-    # Deterministic post-filtering: apply server-side filters for type and
-    # experience so the returned result set strictly matches requested filters.
-    # This operates on our normalized values (the `type` field and
-    # `experience_level` field we set above).
     post_filtered_results = list(results)
     want_label = _canonicalize_type_input(job_type_filter)
     want_exp = _canonicalize_experience_input(experience_filter)
@@ -1339,26 +1505,153 @@ def recommend():
     return ok({"results": results})
 
 
-# POST /api/jobs/recommend { "job_title": "...", "skills": [...], "location": "..." }
-@app.post("/api/jobs/recommend")
-def job_recommend_mock():
+@app.post("/api/match")
+def match_job():
+    """
+    Body JSON:
+      - resume_id: int (required)
+      - job_id: int (optional)  OR
+      - job: { "title":..., "company":..., "description":..., "skills": [...] } (optional)
+
+    Returns relevance percentage (0-100), matched skills, and gaps.
+    """
     data = request.get_json(force=True) or {}
-    job_title = data.get("job_title")
-    skills = data.get("skills", [])
-    location = data.get("location")
+    resume_id = data.get("resume_id")
+    resume_text_provided = (data.get("resume_text") or "").strip()
+    job_id = data.get("job_id")
+    job_obj = data.get("job")
 
-    # Validate required fields
-    if not job_title or not skills or not location:
-        return bad("Missing required field(s): job_title, skills, and location are required")
+    # Accept either an inline resume_text (useful for quick tests) or a resume_id
+    db, cursor = get_db()
+    resume_text = ""
+    user_listed_skills: List[str] = []
 
-    # Mock response
-    mock_score = 85 if "data analysis" in [s.lower() for s in skills] else 70
-    return ok({
-        "message": "Job recommendation generated successfully",
-        "input": data,
-        "mock_score": mock_score,
-    })
+    if resume_text_provided:
+        resume_text = resume_text_provided
+    elif resume_id:
+        if db:
+            try:
+                cursor.execute("SELECT resume_text FROM resumes WHERE id=%s", (resume_id,))
+                row = cursor.fetchone()
+                if row:
+                    resume_text = row.get("resume_text") or ""
+            except Exception as e:
+                app.logger.exception(e)
 
+        if not resume_text:
+            r = MEM["resumes"].get(resume_id, {})
+            resume_text = r.get("text", "")
+            user_listed_skills = r.get("skills", []) or []
+
+    if not resume_text:
+        return bad("Missing 'resume_id' or 'resume_text'")
+
+    # Determine job data
+    job_skills: List[str] = []
+    job_title = ""
+    job_company = ""
+    desc = ""
+
+    # If job_id provided, fetch from DB or MEM
+    if job_id and not job_obj:
+        if db:
+            try:
+                cursor.execute(
+                    "SELECT job_id, title, company_name AS company, description, location FROM jobs WHERE job_id=%s",
+                    (job_id,),
+                )
+                row = cursor.fetchone()
+                if row:
+                    job_title = row.get("title") or ""
+                    job_company = row.get("company") or ""
+                    desc = row.get("description") or ""
+                else:
+                    desc = ""
+            except Exception as e:
+                app.logger.exception(e)
+                desc = ""
+        else:
+            j = MEM["jobs"].get(job_id, {})
+            job_title = j.get("title", "")
+            job_company = j.get("company", "")
+            desc = j.get("description", "")
+
+        # Try to get explicit skills from DB if stored as JSON under 'skills'
+        if db:
+            try:
+                cursor.execute("SELECT skills FROM jobs WHERE job_id=%s", (job_id,))
+                r2 = cursor.fetchone()
+                if r2 and r2.get("skills"):
+                    job_skills = r2.get("skills") if isinstance(r2.get("skills"), list) else json.loads(r2.get("skills") or "[]")
+            except Exception:
+                pass
+
+    # If job object provided directly
+    if job_obj:
+        job_title = job_obj.get("title", "")
+        job_company = job_obj.get("company", "")
+        desc = job_obj.get("description", "") or job_obj.get("summary", "")
+        job_skills = job_obj.get("skills") or []
+
+    # Derive resume skills from resume text and optional user-listed skills
+    derived = _extract_resume_skills(resume_text, user_listed_skills)
+
+    # Extract job phrases via RAKE (use title+description+company as source)
+    combined_job_text = " ".join([str(x or "") for x in [job_title, desc, job_company]])
+    job_phrases = _rake_extract(combined_job_text, top_n=16)
+
+    # Normalize lists for comparison
+    resume_skills_norm = [s.lower() for s in derived]
+    job_phrases_norm = [p.lower() for p in job_phrases]
+    desc_norm = (desc or "").lower()
+
+    matched = []
+    gaps = []
+
+    for i, rs in enumerate(resume_skills_norm):
+        # exact phrase match against job_phrases
+        if rs in job_phrases_norm:
+            matched.append(derived[i])
+            continue
+
+        # word-boundary search in full description
+        tokens = [t for t in re.split(r"\W+", rs) if t]
+        found = False
+        for t in tokens:
+            if re.search(rf"\b{re.escape(t)}\b", desc_norm):
+                matched.append(derived[i])
+                found = True
+                break
+
+        if not found:
+            # also check against job_skills provided explicitly
+            for js in (job_skills or []):
+                try:
+                    if js and js.lower() == rs:
+                        matched.append(derived[i])
+                        found = True
+                        break
+                except Exception:
+                    continue
+
+        if not found:
+            gaps.append(derived[i])
+
+    # Compute score using same heuristic as before
+    score = max(40, min(99, 60 + 7 * len(matched)))
+
+    result = {
+        "resume_id": resume_id,
+        "job_id": job_id,
+        "title": job_title,
+        "company": job_company,
+        "score_percent": score,
+        "matched_skills": matched,
+        "gaps": gaps,
+        "derived_resume_skills": derived[:8],
+        "job_phrases": job_phrases,
+    }
+    return ok(result)
 
 @app.get('/api/jobs/<int:job_id>')
 def get_job(job_id: int):
@@ -1678,6 +1971,8 @@ def apply_to_job():
         return bad("Missing job_id")
 
     db, cursor = get_db()
+    if not db:
+        return bad("Database not available", 500)
 
     try:
         cursor.execute("""
@@ -1685,10 +1980,42 @@ def apply_to_job():
             VALUES (%s, %s)
         """, (user_id, job_id))
 
-        db.commit()
+        # Commit is redundant with autocommit=True but harmless
+        if hasattr(db, 'commit'):
+            db.commit()
         return ok({"message": "Job marked as applied"})
-    except mysql.connector.IntegrityError:
-        return bad("You already applied to this job", 409)
+    except Exception as e:
+        # Handle both PyMySQL and mysql-connector IntegrityError
+        error_str = str(e).lower()
+        if 'duplicate' in error_str or 'integrity' in error_str:
+            return bad("You already applied to this job", 409)
+        app.logger.error(f"Error applying to job: {e}")
+        return bad(f"Failed to apply: {e}", 500)
+
+@app.delete("/api/users/me/applied-jobs/<int:job_id>")
+def delete_applied_job(job_id):
+    user_id = _get_user_id()
+    if not user_id:
+        return bad("Unauthorized", 401)
+
+    db, cursor = get_db()
+    if not db:
+        return bad("Database not configured", 500)
+
+    try:
+        cursor.execute("""
+            DELETE FROM applied_jobs
+            WHERE user_id=%s AND job_id=%s
+        """, (user_id, job_id))
+
+        # Commit is redundant with autocommit=True but harmless
+        if hasattr(db, 'commit'):
+            db.commit()
+
+        return ok({"message": "Removed applied job"})
+    except Exception as e:
+        app.logger.error(f"Error deleting applied job: {e}")
+        return bad(f"Failed to delete: {e}", 500)
 
 @app.get("/api/users/me/applied-jobs")
 def get_applied_jobs():
@@ -1778,16 +2105,15 @@ def generate_cover_letter_api():
 
     if use_gemini:
         try:
-            generator = CoverLetterGenerator()
-            cover_letter_text = generator.generate_cover_letter(
-                contacts=contacts,
-                sections=sections,
-                tone="professional",
-                job_title=title,
-                company=company,
-                job_description=description,
-                job_board=(job_obj.get("job_board") or None),
-            )
+            cover_letter_text = ml_post("generate-cover-letter", {
+                "job_title": title,
+                "company": company,
+                "job_description": description,
+                "contacts": contacts,
+                "sections": sections,
+                "candidate_name": candidate_name,
+            }).get("cover_letter")
+
         except Exception as e:
             app.logger.exception(f"Gemini generation failed, falling back: {e}")
 
@@ -1835,6 +2161,20 @@ def api_ai_cover_letter():
     """
     # Delegate to the existing implementation which reads from request.json
     return generate_cover_letter_api()
+
+@app.get("/api/health/ml")
+def ml_health():
+    try:
+        r = requests.get(f"{ML_SERVICE_URL}/health", timeout=5)
+        r.raise_for_status()
+        return ok({
+            "ml_status": "up",
+            "details": r.json()
+        })
+    except Exception as e:
+        app.logger.error(f"[ML HEALTH ERROR] {e}")
+        return bad("ML service unavailable", 503)
+
 
 # -----------------------------
 # Main

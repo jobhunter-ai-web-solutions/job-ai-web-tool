@@ -1,6 +1,30 @@
 import { useState, useEffect} from 'react'
 import { Link } from 'react-router-dom'
+import { getAppliedJobs } from '../api/api'
+import { deleteAppliedJob } from '../api/api'
 import './jobAI.css'
+
+const formatSalary = (val) => `$${Math.round((val || 0) / 1000)}k`
+
+const getSalaryText = (job) => {
+  if (job?.salary_range) {
+    try {
+      const parts = String(job.salary_range).split(/[-–—]/).map(p => p.replace(/[^0-9]/g, '').trim()).filter(Boolean)
+      if (parts.length >= 2) {
+        const a = Number(parts[0]) || 0
+        const b = Number(parts[1]) || 0
+        return `${formatSalary(a)} - ${formatSalary(b)}`
+      }
+    } catch (e) {}
+    return String(job.salary_range)
+  }
+  if (job?.salaryMin || job?.salaryMax) {
+    const a = job.salaryMin || 0
+    const b = job.salaryMax || 0
+    return `${formatSalary(a)} - ${formatSalary(b)}`
+  }
+  return 'Not specified'
+}
 
 export default function AppliedJobs() {
   useEffect(() => { document.title = 'Applied Jobs – jobhunter.ai' }, [])
@@ -8,17 +32,7 @@ export default function AppliedJobs() {
   useEffect(() => {
     async function loadAppliedJobs() {
       try {
-        const res = await fetch('/api/users/me/applied-jobs', {
-          credentials: 'include',
-        })
-
-        if (!res.ok) {
-          console.error('Failed to load applied jobs', res.status)
-          setJobs([])
-          return
-        }
-
-        const data = await res.json()
+        const data = await getAppliedJobs()
         setJobs(Array.isArray(data) ? data : [])
       } catch (err) {
         console.error('Error fetching applied jobs', err)
@@ -27,11 +41,39 @@ export default function AppliedJobs() {
     }
 
     loadAppliedJobs()
+    
+    // Listen for changes from MatchedAI tab (when jobs are added)
+    const handleAppliedJobsChange = (event) => {
+      if (event.detail?.action === 'added') {
+        // Refresh the list when a job is added from another tab
+        loadAppliedJobs()
+      }
+    }
+    
+    window.addEventListener('appliedJobsChanged', handleAppliedJobsChange)
+    
+    return () => {
+      window.removeEventListener('appliedJobsChanged', handleAppliedJobsChange)
+    }
   }, [])
 
   const [jobs, setJobs] = useState([]);
   
-  const formatSalary = (val) => `$${Math.round(val / 1000)}k`
+  const handleRemove = async (job) => {
+    if (!job || !job.job_id) return
+    try {
+      await deleteAppliedJob(job.job_id)
+      setJobs(prev => prev.filter(j => j.job_id !== job.job_id))
+      
+      // Notify other tabs/components that applied jobs changed
+      window.dispatchEvent(new CustomEvent('appliedJobsChanged', { 
+        detail: { action: 'removed', job_id: job.job_id } 
+      }))
+    } catch (err) {
+      console.error('deleteAppliedJob failed', err)
+    }
+  }
+
 
   return (
     <div>
@@ -85,9 +127,14 @@ export default function AppliedJobs() {
             </div>
           )}
           {/* Populate job cards */}
-          {jobs.map((job,index) => (
-          <JobCard key={index} job={job} formatSalary={formatSalary}/>
-          ))}
+            {jobs.map((job,index) => (
+              <JobCard
+                key={job.job_id || index}
+                job={job}
+                formatSalary={formatSalary}
+                onRemove={() => handleRemove(job)}
+              />
+            ))}
           </section>
         </main>
       </div>
@@ -95,7 +142,7 @@ export default function AppliedJobs() {
   )
 }
 
-function JobCard({job, formatSalary}) {
+function JobCard({job, formatSalary, onRemove}) {
   const title = job.title
   const company = job.company_name || job.company
   const location = job.location
@@ -111,18 +158,37 @@ function JobCard({job, formatSalary}) {
         <div style={{display:'flex', justifyContent:'space-between', gap:12, alignItems:'flex-start'}}>
           <div style={{minWidth:0}}>
             <h4 data-slot="card-title" style={{margin:0}}>{job.title}</h4>
-            <p data-slot="card-description">{job.company} · {job.location} {job.type ? `• ${job.type}` : ''}</p>
+            <p data-slot="card-description">{job.company || job.company_name} {job.type ? `• ${job.type}` : ''}</p>
 
             <div className="text-muted-foreground" style={{marginTop:6}}>
-              <div className="skills">Skills: {Array.isArray(job.skills) ? job.skills.join(', ') : (job.skills || '')}</div>
-              <div className="salary-range">Salary: {formatSalary(job.salaryMin)} - {formatSalary(job.salaryMax)}</div>
-              <div className='job-experience'>Experience: {job.experience}</div>
+              {(() => {
+                const r = job?.raw || {};
+                const loc = job?.location || (r.location && (r.location.display_name || r.location.area)) || '';
+                const created = r.created || r.created_at || r.date || r.created_date || job?.created || job?.posted_at;
+                let days = null;
+                if (created) {
+                  const d = new Date(created);
+                  if (!isNaN(d)) {
+                    days = Math.floor((Date.now() - d.getTime()) / (1000 * 60 * 60 * 24));
+                  }
+                }
+                const timeVal = r.Time ?? job?.time ?? job?.posted_days;
+                return (
+                  <>
+                    <div className="location"><strong>Location:</strong> {loc || 'N/A'}</div>
+                    <div className="days-posted"><strong>Days Posted:</strong> {days !== null ? `${days} day${days === 1 ? '' : 's'}` : (timeVal || timeVal === 0 ? String(timeVal) : 'N/A')}</div>
+                  </>
+                )
+              })()}
+
+              <div className="salary-range"><strong>Salary:</strong> {formatSalary(job.salaryMin)} - {formatSalary(job.salaryMax)}</div>
+              <div className='job-experience'><strong>Experience:</strong> {job.experience}</div>
             </div>
           </div>
 
           <div style={{textAlign:'right', minWidth:72}}>
             <div className="text-muted-foreground" style={{marginBottom:6}}>Match</div>
-            <div><strong>{job.matchScore ?? 0}%</strong></div>
+            <div><strong>{job.score ?? job.matchScore ?? job.match_score ?? 0}%</strong></div>
           </div>
         </div>
       </div>
@@ -136,6 +202,9 @@ function JobCard({job, formatSalary}) {
           >
             <button>View</button>
           </a>
+            <button onClick={() => onRemove && onRemove()}>
+              Remove from Applied
+            </button>
         </div>
       </div>
     </div>

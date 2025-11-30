@@ -13,10 +13,6 @@ CREATE TABLE IF NOT EXISTS users (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- ** MOCK USER. REMOVE WHEN REAL AUTH USER IS CREATED **
-INSERT INTO users (id, full_name, email, password_hash, role)
-VALUES (1, 'Dev User', 'dev@example.com', 'dev-placeholder-hash', 'jobseeker');
-
 -- 2. USER PROFILES
 CREATE TABLE IF NOT EXISTS user_profiles (
     user_id INT PRIMARY KEY,
@@ -39,11 +35,9 @@ CREATE TRIGGER trg_users_after_insert
 AFTER INSERT ON users
 FOR EACH ROW
 BEGIN
-  INSERT INTO user_profiles (user_id) VALUES (NEW.id);
+    INSERT IGNORE INTO user_profiles (user_id) VALUES (NEW.id);
 END$$
 DELIMITER ;
-
-UPDATE user_profiles SET phone='', location='', desired_salary=NULL WHERE user_id=1;
 
 -- 3. USER SKILLS
 CREATE TABLE IF NOT EXISTS user_skills (
@@ -52,7 +46,8 @@ CREATE TABLE IF NOT EXISTS user_skills (
     skill_name VARCHAR(100) NOT NULL,
     proficiency ENUM('beginner','intermediate','advanced','expert') DEFAULT 'beginner',
     years_experience INT DEFAULT 0,
-    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    CONSTRAINT fk_user_skills_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    UNIQUE KEY unique_skill_per_user (user_id, skill_name)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- 4. EDUCATION
@@ -124,7 +119,7 @@ CREATE TABLE IF NOT EXISTS saved_jobs (
     saved_job_id INT AUTO_INCREMENT PRIMARY KEY,
     user_id INT NOT NULL,
     job_id INT NOT NULL,
-    date_saved DATETIME DEFAULT CURRENT_TIMESTAMP,
+    date_saved TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     notes VARCHAR(255),
     CONSTRAINT fk_savedjobs_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
     CONSTRAINT fk_savedjobs_job  FOREIGN KEY (job_id)  REFERENCES jobs(job_id) ON DELETE CASCADE,
@@ -143,4 +138,3 @@ CREATE TABLE IF NOT EXISTS applied_jobs (
         REFERENCES jobs(job_id) ON DELETE CASCADE,
     UNIQUE KEY uq_applied_user_job (user_id, job_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-

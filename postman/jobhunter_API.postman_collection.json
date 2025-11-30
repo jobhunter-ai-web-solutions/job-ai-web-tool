@@ -1,0 +1,315 @@
+{
+  "info": {
+    "name": "JobHunter.ai API Collection",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Auth - Register",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseURL}}/api/auth/register",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"full_name\":\"Test User\",\"email\":\"test@example.com\",\"password\":\"password123\"}"
+            }
+          }
+        },
+        {
+          "name": "Auth - Login",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseURL}}/api/auth/login",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"email\":\"test@example.com\",\"password\":\"password123\"}"
+            }
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "Users",
+      "item": [
+        {
+          "name": "GET - User Profile",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": "{{baseURL}}/api/users/me"
+          }
+        },
+        {
+          "name": "PUT - Update Profile",
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{baseURL}}/api/users/me/profile",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"name\":\"Updated Name\",\"title\":\"Senior Analyst\",\"email\":\"updated@example.com\",\"location\":\"Dallas, TX\",\"phone\":\"123-555-9012\",\"job_preferences\":{\"locations\":[\"Remote\",\"Dallas\"],\"type\":\"Full-time\"},\"desired_salary\":95000}"
+            }
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "Resumes",
+      "item": [
+        {
+          "name": "POST - Upload Resume (Text)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{baseURL}}/api/resumes",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"text\": \"Sample resume content here.\"}"
+            }
+          }
+        },
+        {
+          "name": "POST - Upload Resume (File)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": "{{baseURL}}/api/resumes",
+            "body": {
+              "mode": "formdata",
+              "formdata": [{ "key": "file", "type": "file", "src": "" }]
+            }
+          }
+        },
+        {
+          "name": "GET - Latest Resume",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": "{{baseURL}}/api/resumes"
+          }
+        },
+        {
+          "name": "PUT - Replace Resume",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": "{{baseURL}}/api/resumes/1",
+            "body": {
+              "mode": "formdata",
+              "formdata": [{ "key": "file", "type": "file", "src": "" }]
+            }
+          }
+        },
+        {
+          "name": "DELETE - Delete Resume",
+          "request": {
+            "method": "DELETE",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": "{{baseURL}}/api/resumes/1"
+          }
+        },
+        {
+          "name": "GET - Parsed Resume",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": "{{baseURL}}/api/resumes/1/parsed"
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "Jobs",
+      "item": [
+        {
+          "name": "POST - Jobs Search",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{baseURL}}/api/jobs/search",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"query\":\"data analyst\",\"location\":\"Texas\",\"type\":\"Full-time\",\"experience\":\"Mid\",\"page\":1}"
+            }
+          }
+        },
+        {
+          "name": "GET - Job Details",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": "{{baseURL}}/api/jobs/1"
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "Recommendations",
+      "item": [
+        {
+          "name": "POST - Recommend Jobs by Resume",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{baseURL}}/api/recommend",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"resume_id\":1,\"job_ids\":[10,12,14]}"
+            }
+          }
+        },
+        {
+          "name": "POST - Recommend Job (Mock)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{baseURL}}/api/jobs/recommend",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"job_title\":\"Data Analyst\",\"skills\":[\"SQL\",\"Python\"],\"location\":\"Remote\"}"
+            }
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "Cover Letters",
+      "item": [
+        {
+          "name": "POST - Generate Cover Letter",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{baseURL}}/api/cover_letter",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"job_id\":1,\"resume_id\":1,\"match_score\":82}"
+            }
+          }
+        },
+        {
+          "name": "POST - AI Cover Letter (Alias)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{baseURL}}/api/ai/cover-letter",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"job_id\":1,\"resume_id\":1}"
+            }
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "Saved Jobs",
+      "item": [
+        {
+          "name": "GET - Saved Jobs",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": "{{baseURL}}/api/users/me/saved-jobs"
+          }
+        },
+        {
+          "name": "POST - Save Job",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{baseURL}}/api/users/me/saved-jobs",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"job_id\":10,\"notes\":\"Looks good.\"}"
+            }
+          }
+        },
+        {
+          "name": "DELETE - Remove Saved Job",
+          "request": {
+            "method": "DELETE",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": "{{baseURL}}/api/users/me/saved-jobs/10"
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "Applied Jobs",
+      "item": [
+        {
+          "name": "GET - Applied Jobs",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": "{{baseURL}}/api/users/me/applied-jobs"
+          }
+        },
+        {
+          "name": "POST - Apply to Job",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{baseURL}}/api/users/me/applied-jobs",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"job_id\":10}"
+            }
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "System",
+      "item": [
+        {
+          "name": "GET - Health Check",
+          "request": {
+            "method": "GET",
+            "url": "{{baseURL}}/api/health"
+          }
+        }
+      ]
+    }
+  ]
+}

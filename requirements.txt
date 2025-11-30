@@ -28,6 +28,7 @@ streamlit==1.36.0
 google-generativeai>=0.8.0
 # ---- SQL
 mysql-connector-python==9.4.0
+PyMySQL
 
 # ---- pdf reader
 pdfminer.six==20231228

@@ -17,11 +17,12 @@ def _build_prompt(
     extras: str | None = None,
     job_description: str | None = None,
     job_board: str | None = None,
+    candidate_name: str | None = None,
 ) -> str:
     contacts = contacts or {}
     sections = sections or {}
     
-    name = contacts.get("name", "Candidate")
+    name = candidate_name or contacts.get("name", "Candidate")
     skills = sections.get("skills","")
     projects = sections.get("projects", "")
     experience = sections.get("experience", "")
@@ -89,6 +90,7 @@ class CoverLetterGenerator:
         company: str | None = None,
         job_description: str | None = None,
         job_board: str | None = None,
+        candidate_name: str | None = None,
     ) -> str:
         prompt = _build_prompt(
             contacts=contacts,
@@ -98,6 +100,7 @@ class CoverLetterGenerator:
             company=company,
             job_description=job_description,
             job_board=job_board,
+            candidate_name=candidate_name,
         )
         resp = self.model.generate_content(prompt)
         return (getattr(resp, "text", None) or "").strip()

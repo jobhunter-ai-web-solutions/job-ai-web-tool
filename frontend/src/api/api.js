@@ -1,8 +1,10 @@
 // src/api/api.js
 
 // Use Vite-provided env or sensible defaults. Prefer VITE_API_BASE when set.
+// Use Vite-provided env or sensible defaults. Prefer VITE_API_BASE when set.
 const API_BASE =
-  import.meta.env.VITE_API_BASE || (import.meta.env.PROD ? "https://api.yourdomain.com/api" : "http://localhost:5001/api");
+  import.meta.env.VITE_API_BASE ||
+  (import.meta.env.PROD ? "https://job-ai-web-tool.onrender.com/api" : "http://localhost:5001/api");
 
 // Helper: Handle errors & responses
 async function handleResponse(res) {
@@ -291,6 +293,15 @@ export async function applyJob(jobId) {
   return handleResponse(res);
 }
 
+// Get applied jobs for the current user (returns an array of applied job objects)
+export async function getAppliedJobs() {
+  const token = getToken()
+  const headers = { 'Content-Type': 'application/json' }
+  if (token) headers['Authorization'] = `Bearer ${token}`
+  const res = await fetch(`${API_BASE}/users/me/applied-jobs`, { headers, credentials: 'include' })
+  return handleResponse(res)
+}
+
 // Register a new user
 export async function authRegister(payload) {
   const res = await fetch(`${API_BASE}/auth/register`, {
@@ -326,6 +337,17 @@ export async function deleteSavedJob(jobId) {
   const headers = { 'Content-Type': 'application/json' }
   if (token) headers['Authorization'] = `Bearer ${token}`
   const res = await fetch(`${API_BASE}/users/me/saved-jobs/${jobId}`, {
+    method: 'DELETE',
+    headers,
+  })
+  return handleResponse(res)
+}
+
+export async function deleteAppliedJob(jobId) {
+  const token = getToken()
+  const headers = { 'Content-Type': 'application/json' }
+  if (token) headers['Authorization'] = `Bearer ${token}`
+  const res = await fetch(`${API_BASE}/users/me/applied-jobs/${jobId}`, {
     method: 'DELETE',
     headers,
   })
