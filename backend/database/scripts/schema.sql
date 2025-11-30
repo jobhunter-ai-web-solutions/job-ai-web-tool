@@ -138,3 +138,43 @@ CREATE TABLE IF NOT EXISTS applied_jobs (
         REFERENCES jobs(job_id) ON DELETE CASCADE,
     UNIQUE KEY uq_applied_user_job (user_id, job_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- -----------------------------
+-- Migration: Add external_id to jobs table
+USE jobhunter_ai;
+
+-- Add external_id column if it doesn't exist
+-- Add external_id column and index if they do not exist (portable across MySQL/MariaDB)
+-- Use INFORMATION_SCHEMA checks + prepared statements so this script is idempotent
+
+SET @schema_name = DATABASE();
+
+-- Add column if missing
+SELECT COUNT(*) INTO @col_count
+FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = @schema_name AND TABLE_NAME = 'jobs' AND COLUMN_NAME = 'external_id';
+
+SET @add_col_sql = IF(@col_count = 0,
+    'ALTER TABLE jobs ADD COLUMN external_id VARCHAR(100) NULL AFTER job_id',
+    'SELECT "external_id column already exists"');
+
+PREPARE stmt_col FROM @add_col_sql;
+EXECUTE stmt_col;
+DEALLOCATE PREPARE stmt_col;
+
+-- Add unique index if missing
+SELECT COUNT(*) INTO @idx_count
+FROM INFORMATION_SCHEMA.STATISTICS
+WHERE TABLE_SCHEMA = @schema_name AND TABLE_NAME = 'jobs' AND INDEX_NAME = 'idx_jobs_external_id';
+
+SET @add_idx_sql = IF(@idx_count = 0,
+    'ALTER TABLE jobs ADD UNIQUE INDEX idx_jobs_external_id (external_id)',
+    'SELECT "idx_jobs_external_id already exists"');
+
+PREPARE stmt_idx FROM @add_idx_sql;
+EXECUTE stmt_idx;
+DEALLOCATE PREPARE stmt_idx;
+
+-- Ensure the column has a helpful comment (this is safe to run repeatedly)
+ALTER TABLE jobs
+    MODIFY COLUMN external_id VARCHAR(100) NULL COMMENT 'External job ID from API provider (e.g., Adzuna ID)';
