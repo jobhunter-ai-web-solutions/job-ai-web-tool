@@ -21,6 +21,8 @@ import html as _html
 
 from flask import Flask, request, jsonify, make_response, g
 from flask_cors import CORS
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 from dotenv import load_dotenv
 
 # MySQL
@@ -52,6 +54,13 @@ def ml_post(path: str, payload: dict):
 # Environment Loading & Flask App Setup
 load_dotenv()
 app = Flask(__name__)
+# Rate Limiter (security)
+limiter = Limiter(
+    key_func=get_remote_address,
+    app=app,
+    default_limits=["200 per day", "50 per hour"]
+)
+
 
 # General App Config
 JOB_DESCRIPTION_MAX_CHARS = int(os.getenv("JOB_DESCRIPTION_MAX_CHARS", "2000"))
@@ -84,8 +93,10 @@ CORS(
     expose_headers=["Content-Type", "Authorization"],
 )
 
-# JWT / Auth Utilities
-JWT_SECRET = os.getenv("JWT_SECRET", "super-secret-key")
+# JWT Utilities
+JWT_SECRET = os.getenv("JWT_SECRET")
+if not JWT_SECRET:
+    raise RuntimeError("JWT_SECRET is not set. Add it to your environment variables.")
 JWT_ALGO = "HS256"
 JWT_EXPIRE_MINUTES = 30
 
@@ -534,6 +545,7 @@ def health():
 
 # POST /api/resumes  JSON {"text": "...", "meta":{"name":"...", "skills":[...], "experience":"..."}}
 # or multipart 'file'
+@limiter.limit("10 per minute")
 @app.post("/api/resumes")
 def upload_resume():
     db, cursor = get_db()
@@ -1017,6 +1029,7 @@ def _canonicalize_experience_input(s: str) -> str:
 # -----------------------------
 # Authentication endpoints
 # -----------------------------
+@limiter.limit("10 per minute")
 @app.post("/api/auth/register")
 def auth_register():
     data = request.get_json(force=True) or {}
@@ -1094,7 +1107,7 @@ def auth_register():
 
     return ok({"token": token, "user": user_obj})
 
-
+@limiter.limit("10 per minute")
 @app.post("/api/auth/login")
 def auth_login():
     data = request.get_json(force=True) or {}
@@ -1692,6 +1705,7 @@ def get_job(job_id: int):
 # -----------------------------
 # Chat endpoint for landing page
 # -----------------------------
+@limiter.limit("20 per minute")
 @app.post("/api/chat")
 def chat():
     """Simple chat endpoint for the landing-page assistant."""
