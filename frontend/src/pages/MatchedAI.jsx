@@ -5,7 +5,7 @@ import './jobAI.css'
 import { searchJobs, getRecommendations, generateCoverLetter, saveJob, applyJob, getJob, getAppliedJobs } from '../api/api'
 
 export default function MatchedAI() {
-  useEffect(() => { document.title = 'AI Matched Jobs – jobhunter.ai' }, [])
+  useEffect(() => { document.title = 'Search for Jobs – jobhunter.ai' }, [])
 
   const [jobs, setJobs] = useState([])
   const [type, setType] = useState("")
@@ -32,6 +32,7 @@ export default function MatchedAI() {
   const [unfilteredTotalResults, setUnfilteredTotalResults] = useState(null)
   const [copyStatus, setCopyStatus] = useState('')
   const [appliedJobIds, setAppliedJobIds] = useState(new Set())
+  const [sortOrder, setSortOrder] = useState('score-desc')
 
   // Debug: Log when appliedJobIds changes
   useEffect(() => {
@@ -174,10 +175,15 @@ export default function MatchedAI() {
 
       }
 
-      const rid = parseInt(localStorage.getItem('resume_id') || '', 10)
-      if (rid && mapped.length) {
+      const storedRid = parseInt(localStorage.getItem('resume_id') || '', 10)
+      // In dev, fall back to resume_id=1 for quicker testing when no resume uploaded
+      const rid = storedRid || (import.meta.env.DEV ? 1 : 0)
+      console.debug('Using resume_id for recommendations:', rid)
+          if (rid && mapped.length) {
         try {
-          const rec = await getRecommendations(rid, mapped.map((m) => m.job_id))
+          // Request field-aware scoring from the backend in DEV for immediate feedback.
+          // Pass full job objects so backend can score even when it doesn't have MEM entries
+          const rec = await getRecommendations(rid, mapped, { use_field_aware: import.meta.env.DEV ? true : undefined })
           if (rec && Array.isArray(rec.results)) {
             const scoresById = {}
             rec.results.forEach((r) => { scoresById[r.job_id] = r })
@@ -332,6 +338,17 @@ export default function MatchedAI() {
     })
   }, [jobs, experience, salaryMin, salaryMax, location])
 
+  // Derived sorted list based on selected sort order. Must be a top-level hook.
+  const sortedJobs = useMemo(() => {
+    const arr = Array.isArray(filterJobs) ? [...filterJobs] : []
+    if (sortOrder === 'score-desc') {
+      arr.sort((a,b) => (Number(b.score || b.matchScore || b.match_score || 0) - Number(a.score || a.matchScore || a.match_score || 0)))
+    } else if (sortOrder === 'score-asc') {
+      arr.sort((a,b) => (Number(a.score || a.matchScore || a.match_score || 0) - Number(b.score || b.matchScore || b.match_score || 0)))
+    }
+    return arr
+  }, [filterJobs, sortOrder])
+
   const handleCopyToClipboard = async () => {
     try {
       await navigator.clipboard.writeText(coverModalContent || '')
@@ -382,7 +399,14 @@ v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c
               </Link>
             </li>
             <li><Link to="/resume_upload">Upload Resume</Link></li>
-            <li><Link to="/matchedAI">AI Matched Jobs</Link></li>
+            <li>
+              <Link to="/matchedAI" className="nav-link">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="nav-icon" aria-hidden="true">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35M10.5 18a7.5 7.5 0 1 0 0-15 7.5 7.5 0 0 0 0 15z" />
+                </svg>
+                Search
+              </Link>
+            </li>
             <li><Link to="/savedJobs">Saved Jobs</Link></li>
             <li><Link to="/appliedJobs">Applied Jobs</Link></li>
             <li><Link to="/profile">Profile</Link></li>
@@ -390,9 +414,12 @@ v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c
         </nav>
 
         <main className="container">
-          <h1>AI Matched Jobs</h1>
-          <p className="text-muted-foreground">Jobs matched to your resume and preferences.</p>
+          <h1>Search for Jobs</h1>
+          <p className="text-muted-foreground">Search for jobs that match your resume and preferences.</p>
           <p className="text-muted-foreground">Use filters to help narrow results.</p>
+          <p className="text-muted-foreground" style={{ fontSize: 12, marginTop: 6 }}>
+            Note: Match scores are loosely based on resume keywords and field profiles — they are approximate indicators.
+          </p>
 
           <form id="filtersForm" className="filters" onSubmit={(e) => { e.preventDefault(); setPage(1); fetchJobs({ query: searchQuery, location, page: 1, salaryMin, salaryMax, type, experience }); }} style={{
             width: '100vw',
@@ -523,6 +550,14 @@ v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c
             }}>
               Apply Filters
             </button>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 8 }}>
+                <span style={{ fontSize: 13, color: 'var(--muted)' }}>Sort:</span>
+                <select value={sortOrder} onChange={(e) => setSortOrder(e.target.value)} style={{ minWidth: 160 }}>
+                  <option value="score-desc">Best match (high → low)</option>
+                  <option value="score-asc">Worst match (low → high)</option>
+                  <option value="relevance">Relevance</option>
+                </select>
+              </label>
             {/* results-per-page control removed from UI (backend controls page size) */}
           </form>
 
@@ -549,7 +584,7 @@ v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c
             gap: '14px',
             marginTop: '8px'
           }}>
-            {filterJobs.map((job,index) => (
+            {sortedJobs.map((job,index) => (
               <JobCard
                 key={job.job_id || index}
                 job={job}
@@ -758,7 +793,15 @@ function JobCard({job, formatSalary, onView, onSave, onApply, onGenerateCover, i
 
           <div style={{textAlign:'right', minWidth:72}}>
             <div className="text-muted-foreground" style={{marginBottom:6}}>Match</div>
-            <div><strong>{job.score ?? job.matchScore ?? 0}%</strong></div>
+            {(() => {
+              const pct = Number(job.score ?? job.matchScore ?? 0) || 0
+              const color = pct >= 75 ? 'var(--success)' : (pct >= 50 ? 'orange' : 'var(--danger)')
+              return (
+                <div>
+                  <strong style={{color}}>{pct}%</strong>
+                </div>
+              )
+            })()}
           </div>
         </div>
       </div>

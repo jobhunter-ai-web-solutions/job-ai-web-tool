@@ -173,7 +173,7 @@ export default function ResumeUpload() {
               </a>
             </li>
             <li><a href="/resume_upload">Upload Resume</a></li>
-            <li><a href="/matchedAI">AI Matched Jobs</a></li>
+            <li><a href="/matchedAI">Search</a></li>
             <li><a href="/savedJobs">Saved Jobs</a></li>
             <li><a href="/appliedJobs">Applied Jobs</a></li>
             <li><a href="/profile">Profile</a></li>
@@ -183,7 +183,7 @@ export default function ResumeUpload() {
         {/* Main Content */}
         <main className="container" style={{ width: '100vw', maxWidth: '100%', boxSizing: 'border-box' }}>
           <h1 className="page-title">Upload Your Resume</h1>
-          <p className="text-muted-foreground">Let AI help you match with jobs</p>
+          <p className="text-muted-foreground">We'll check your resume and give you tips to make it better</p>
 
           <div data-slot="card" className="bg-card text-card-foreground flex flex-col gap-6 rounded-xl border">
             <div data-slot="card-header" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px', paddingTop: '24px', paddingBottom: '12px' }}>
@@ -195,7 +195,6 @@ export default function ResumeUpload() {
                 </svg>
               </div>
               <h4 data-slot="card-title" className="leading-none" style={{ margin: 0 }}>Upload Your Resume</h4>
-              <p data-slot="card-description" className="text-muted-foreground" style={{ margin: 0 }}>We'll check your resume and give you tips to make it better</p>
             </div>
 
             <div data-slot="card-content" className="px-6 [&:last-child]:pb-6 space-y-4" style={{ paddingBottom: '24px' }}>

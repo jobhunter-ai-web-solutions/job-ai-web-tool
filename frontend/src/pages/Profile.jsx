@@ -199,7 +199,7 @@ export default function Profile() {
               </Link>
             </li>
             <li><Link to="/resume_upload">Upload Resume</Link></li>
-            <li><Link to="/matchedAI">AI Matched Jobs</Link></li>
+            <li><Link to="/matchedAI">Search</Link></li>
             <li><Link to="/savedJobs">Saved Jobs</Link></li>
             <li><Link to="/appliedJobs">Applied Jobs</Link></li>
             <li><Link to="/profile">Profile</Link></li>
