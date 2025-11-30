@@ -194,11 +194,26 @@ export async function searchJobs(options = {}) {
 }
 
 // Get recommendations
-export async function getRecommendations(resumeId, jobIds) {
+export async function getRecommendations(resumeId, jobIdsOrJobs, opts = {}) {
+  // jobIdsOrJobs can be an array of job IDs (numbers/strings) or an array of job objects.
+  const first = Array.isArray(jobIdsOrJobs) && jobIdsOrJobs.length ? jobIdsOrJobs[0] : null
+  let jobIds = []
+  let jobsPayload = undefined
+  if (first && typeof first === 'object') {
+    jobsPayload = jobIdsOrJobs
+    jobIds = jobIdsOrJobs.map(j => j.job_id || j.external_id).filter(Boolean)
+  } else {
+    jobIds = Array.isArray(jobIdsOrJobs) ? jobIdsOrJobs : []
+  }
+
+  const body = { resume_id: resumeId, job_ids: jobIds }
+  if (jobsPayload) body.jobs = jobsPayload
+  if (opts.use_field_aware !== undefined) body.use_field_aware = !!opts.use_field_aware
+
   const res = await fetch(`${API_BASE}/recommend`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ resume_id: resumeId, job_ids: jobIds }),
+    body: JSON.stringify(body),
   });
 
   const data = await handleResponse(res);
