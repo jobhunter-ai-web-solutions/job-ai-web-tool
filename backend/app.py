@@ -54,13 +54,13 @@ def ml_post(path: str, payload: dict):
 # Environment Loading & Flask App Setup
 load_dotenv()
 app = Flask(__name__)
+
 # Rate Limiter (security)
 limiter = Limiter(
     key_func=get_remote_address,
     app=app,
-    default_limits=["200 per day", "50 per hour"]
+    default_limits=["200 per day", "50 per hour"],
 )
-
 
 # General App Config
 JOB_DESCRIPTION_MAX_CHARS = int(os.getenv("JOB_DESCRIPTION_MAX_CHARS", "2000"))
@@ -93,10 +93,12 @@ CORS(
     expose_headers=["Content-Type", "Authorization"],
 )
 
-# JWT Utilities
+#JWT Utilities
 JWT_SECRET = os.getenv("JWT_SECRET")
 if not JWT_SECRET:
     raise RuntimeError("JWT_SECRET is not set. Add it to your environment variables.")
+# JWT / Auth Utilities
+JWT_SECRET = os.getenv("JWT_SECRET", "super-secret-key")
 JWT_ALGO = "HS256"
 JWT_EXPIRE_MINUTES = 30
 
@@ -118,6 +120,24 @@ def handle_uncaught(e):
 # -----------------------------
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+
+# Feature flag: enable field-aware simple matcher
+USE_FIELD_AWARE_MATCHER = str(os.getenv("USE_FIELD_AWARE_MATCHER", "false") or "").lower() in ("1", "true", "yes")
+# Feature flag: produce looser (more generous) scoring when enabled
+USE_LOOSE_SCORING = str(os.getenv("USE_LOOSE_SCORING", "true") or "").lower() in ("1", "true", "yes")
+# Feature flag: produce looser (more generous) scoring when enabled
+SCORE_LOOSENESS = float(os.getenv("SCORE_LOOSENESS", "1.55"))
+# Field-aware tuning: small boost when resume and job share a detected field,
+# and a multiplier penalty when they differ. Tune via env vars.
+FIELD_MATCH_BOOST = float(os.getenv("FIELD_MATCH_BOOST", ".15"))
+FIELD_MISMATCH_PENALTY = float(os.getenv("FIELD_MISMATCH_PENALTY", "0.4"))
+# Weight to apply to matches from the `base_skills` bucket (lower than priority_skills)
+BASE_SKILL_WEIGHT = float(os.getenv("BASE_SKILL_WEIGHT", "0.4"))
+
+FAVOR_FIELDS = [f.strip().lower() for f in os.getenv("FAVOR_FIELDS", "").split(",") if f.strip()]
+FAVOR_FIELD_BOOST = float(os.getenv("FAVOR_FIELD_BOOST", "0.45"))
+TITLE_MATCH_BOOST = float(os.getenv("TITLE_MATCH_BOOST", "0.1"))
+TITLE_SPREAD_PER_SCORE = float(os.getenv("TITLE_SPREAD_PER_SCORE", "0.05"))
 
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
@@ -286,10 +306,19 @@ def _normalize_ws(s: str) -> str:
 # Simple skill extraction / scoring utilities
 _BASE_SKILLS = {
     "python", "sql", "excel", "power bi", "tableau", "snowflake", "pandas", "numpy", "r",
-    "java", "javascript", "react", "node", "api", "rest", "fastapi", "flask",
-    "dashboards", "kpi", "etl", "data pipeline", "airflow", "docker", "kubernetes",
-    "git", "jira", "experimentation", "a b testing", "a/b testing", "statistics",
+    "java", "javascript", "react", "reactjs", "node", "nodejs", "api", "rest", "fastapi", "flask",
+    "dashboards", "kpi", "etl", "data pipeline", "airflow", "docker", "kubernetes", "k8s",
+    "git", "github", "gitlab", "jira", "confluence", "experimentation", "a b testing", "a/b testing", "statistics",
     "forecast", "supply chain", "sap", "ibp", "ml", "machine learning", "genai",
+    "tensorflow", "pytorch", "scikit-learn", "sklearn", "keras",
+    "spark", "hadoop", "hive", "bigquery", "redshift", "dbt",
+    "aws", "azure", "gcp", "terraform", "ansible", "helm",
+    "docker-compose", "prometheus", "grafana",
+    "typescript", "graphql", "webpack", "vite", "nextjs", "gatsby",
+    "html", "css", "sass", "tailwind", "bootstrap",
+    "c++", "c#", "golang", "go",
+    "microservices", "ci/cd", "restapi", "restful",
+    "tableau", "powerbi", "lookml", "metabase",
 }
 
 
@@ -343,6 +372,242 @@ def _make_cover_letter(
         f"and learn quickly to meet team goals.\n\n"
         f"Thank you for your time and consideration.\nSincerely,\n{who}"
     )
+
+
+# -----------------------------
+# Simple, field-aware non-LLM matching utilities
+# Profiles and keywords are loaded from `backend/field_profiles.py` to keep
+# `app.py` smaller and make profiles easy to export/edit.
+# -----------------------------
+import importlib.util
+_FIELD_KEYWORDS = {}
+FIELD_PROFILES = {}
+
+_profiles_json = os.path.join(os.path.dirname(__file__), "field_profiles.json")
+_profiles_path = os.path.join(os.path.dirname(__file__), "field_profiles.py")
+
+_loaded_profiles = False
+
+# Prefer loading the Python module directly (so you don't need to regenerate JSON).
+# Fall back to the exported JSON if the module is unavailable or fails to load.
+if os.path.exists(_profiles_path):
+    try:
+        spec = importlib.util.spec_from_file_location("backend_field_profiles", _profiles_path)
+        _fp_mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_fp_mod)
+
+        # If the module exposes a `to_dict()` helper (recommended), use it to
+        # obtain the canonical exported structure (field_keywords, profiles, base_skills).
+        if hasattr(_fp_mod, "to_dict"):
+            try:
+                _data = _fp_mod.to_dict()
+                _FIELD_KEYWORDS = _data.get("field_keywords", {}) or {}
+                FIELD_PROFILES = _data.get("profiles", {}) or {}
+                _BASE_SKILLS = set([s.lower() for s in (_data.get("base_skills") or [])])
+            except Exception:
+                # If to_dict() fails for any reason, fall back to inspecting module attrs
+                _FIELD_KEYWORDS = getattr(_fp_mod, "_FIELD_KEYWORDS", {}) or getattr(_fp_mod, "field_keywords", {})
+                FIELD_PROFILES = getattr(_fp_mod, "FIELD_PROFILES", {}) or getattr(_fp_mod, "profiles", {})
+                _BASE_SKILLS = set([s.lower() for s in (getattr(_fp_mod, "BASE_SKILLS", None) or getattr(_fp_mod, "_BASE_SKILLS", []) or [])])
+        else:
+            _FIELD_KEYWORDS = getattr(_fp_mod, "_FIELD_KEYWORDS", {}) or getattr(_fp_mod, "field_keywords", {})
+            FIELD_PROFILES = getattr(_fp_mod, "FIELD_PROFILES", {}) or getattr(_fp_mod, "profiles", {})
+            _BASE_SKILLS = set([s.lower() for s in (getattr(_fp_mod, "BASE_SKILLS", None) or getattr(_fp_mod, "_BASE_SKILLS", []) or [])])
+
+        _loaded_profiles = True
+        app.logger.info(f"Loaded field profiles from module: {_profiles_path}")
+    except Exception as e:
+        app.logger.warning(f"Failed to load field profiles from module {_profiles_path}: {e}")
+
+if not _loaded_profiles and os.path.exists(_profiles_json):
+    try:
+        with open(_profiles_json, "r", encoding="utf-8") as fh:
+            _data = json.load(fh)
+        _FIELD_KEYWORDS = _data.get("field_keywords", {}) or {}
+        FIELD_PROFILES = _data.get("profiles", {}) or {}
+        app.logger.info(f"Loaded field profiles from JSON: {_profiles_json}")
+        # Load base skills from exported JSON if present
+        _BASE_SKILLS = set([s.lower() for s in (_data.get("base_skills") or [])])
+        _loaded_profiles = True
+    except Exception as e:
+        app.logger.warning(f"Failed to load profiles from JSON {_profiles_json}: {e}")
+
+_STOPWORDS = {
+    "the", "and", "a", "an", "of", "in", "on", "for", "with", "to", "from", "by", "at", "as", "is", "are",
+    "be", "this", "that", "it", "its", "our", "you", "we", "your", "i",
+}
+
+def _tokenize_and_map(s: str, synonyms: dict | None = None) -> List[str]:
+    if not s:
+        return []
+    synonyms = synonyms or {}
+    s = s.lower()
+    s = re.sub(r"[^\w\s]", " ", s)
+    toks = [t for t in s.split() if t and t not in _STOPWORDS and len(t) > 1]
+    mapped = [synonyms.get(t, t) for t in toks]
+    return mapped
+
+def _jaccard(a: List[str], b: List[str]) -> float:
+    sa, sb = set(a), set(b)
+    if not sa or not sb:
+        return 0.0
+    inter = sa.intersection(sb)
+    union = sa.union(sb)
+    return len(inter) / (len(union) or 1)
+
+def _skill_overlap(resume_tokens: List[str], job_skills: List[str], synonyms: dict | None = None) -> float:
+    if not job_skills:
+        return 0.0
+    synonyms = synonyms or {}
+    # normalize job skills into tokens
+    skill_tokens = []
+    for s in job_skills:
+        skill_tokens.extend(_tokenize_and_map(s, synonyms))
+    if not skill_tokens:
+        return 0.0
+    found = 0
+    for skill in set(skill_tokens):
+        if skill in resume_tokens:
+            found += 1
+        else:
+            # check partial presence
+            if any(skill in rt for rt in resume_tokens):
+                found += 1
+    return found / len(set(skill_tokens))
+
+def _detect_field(job: dict) -> str | None:
+    explicit = (job.get("field") or job.get("category") or "").strip().lower()
+    if explicit and explicit in FIELD_PROFILES:
+        return explicit
+    txt = " ".join(filter(None, [job.get("title",""), job.get("description","")])).lower()
+    for fld, kws in _FIELD_KEYWORDS.items():
+        for kw in kws:
+            if kw in txt:
+                return fld
+    return None
+
+def _simple_match_score(resume_text: str, job: dict, use_loose: bool = False) -> Tuple[int, List[str]]:
+    """
+    Lightweight, field-aware score. Returns (score:int, gaps:list[str])
+    """
+    field = _detect_field(job) or "data"  # default to data if uncertain
+    profile = FIELD_PROFILES.get(field, {})
+    weights = profile.get("weights", {"skill": 0.6, "title": 0.25, "desc": 0.15})
+    synonyms = profile.get("synonyms", {})
+    priority = profile.get("priority_skills", [])
+
+    resume_tokens = _tokenize_and_map(resume_text or "", synonyms)
+    title_tokens = _tokenize_and_map(job.get("title", ""), synonyms)
+    desc_tokens = _tokenize_and_map(job.get("description") or job.get("full_description") or "", synonyms)
+    job_skills = job.get("skills") or priority
+
+    # Primary priority-skill overlap
+    skill_overlap = _skill_overlap(resume_tokens, job_skills, synonyms)
+    # Secondary base-skill overlap (lower weight). _BASE_SKILLS is loaded from profiles JSON.
+    try:
+        base_overlap = 0.0
+        if isinstance(_BASE_SKILLS, (set, list)) and len(_BASE_SKILLS) > 0:
+            base_overlap = _skill_overlap(resume_tokens, list(_BASE_SKILLS), synonyms)
+        # Combine priority and base overlaps into an effective skill signal
+        skill_overlap = min(1.0, (skill_overlap + (BASE_SKILL_WEIGHT * base_overlap)))
+    except Exception:
+        pass
+    title_sim = _jaccard(resume_tokens, title_tokens)
+    desc_sim = _jaccard(resume_tokens, desc_tokens)
+
+    # If description missing, reweight to rely more on skills/title
+    if not desc_tokens:
+        total = weights.get("skill", 0.6) + weights.get("title", 0.25)
+        w_skill = weights.get("skill", 0.6) / (total or 1)
+        w_title = weights.get("title", 0.25) / (total or 1)
+        w_desc = 0.0
+    else:
+        w_skill = weights.get("skill", 0.6)
+        w_title = weights.get("title", 0.25)
+        w_desc = weights.get("desc", 0.15)
+
+    # Combine component similarities into a single 0..1 value
+    combined = (skill_overlap * w_skill) + (title_sim * w_title) + (desc_sim * w_desc)
+
+    # Field-aware adjustment: detect the dominant field for the resume and apply
+    # a small boost when the resume and job share the same detected field,
+    # or apply a penalty multiplier when they differ. These are tunable
+    # via env vars `FIELD_MATCH_BOOST` and `FIELD_MISMATCH_PENALTY`.
+    try:
+        resume_field = _detect_field({"title": resume_text or "", "description": resume_text or ""})
+    except Exception:
+        resume_field = None
+    if resume_field and field and resume_field == field:
+        combined = min(1.0, combined + FIELD_MATCH_BOOST)
+    elif resume_field and field and resume_field != field:
+        # Apply multiplicative penalty to reduce cross-field high scores
+        combined = combined * FIELD_MISMATCH_PENALTY
+    # If repository/environment favors certain fields, give those jobs an extra bump
+    # We also count keyword/synonym hits for the field to slightly increase spread
+    try:
+        if field and field.lower() in FAVOR_FIELDS:
+            # gather candidate keywords: field keywords + priority skills
+            fk = []
+            try:
+                fk = list(_FIELD_KEYWORDS.get(field, []) or [])
+            except Exception:
+                fk = []
+            cand_keywords = fk + list(priority or [])
+
+            # count how many field keywords appear in the resume (cap at 5)
+            hits = 0
+            text_l = (resume_text or "").lower()
+            for kw in cand_keywords:
+                if not kw:
+                    continue
+                k = str(kw).lower()
+                if k in text_l:
+                    hits += 1
+                    if hits >= 5:
+                        break
+
+            # small additive boost based on configured FAVOR_FIELD_BOOST + per-hit bonus
+            per_hit_bonus = float(os.getenv("FAVOR_FIELD_PER_HIT", "0.02"))
+            combined = min(1.0, combined + FAVOR_FIELD_BOOST + (per_hit_bonus * hits))
+
+            # apply a small spread multiplier to increase variation for favored fields
+            spread_multiplier = 1.0 + (0.06 * min(hits, 5))
+        else:
+            spread_multiplier = 1.0
+    except Exception:
+        spread_multiplier = 1.0
+
+    # Allow looser scoring mode: increase multiplier and slightly boost skill overlap
+    multiplier = 59
+    min_allowed = 35
+    base = 40
+    if use_loose:
+        # Apply a stronger looseness multiplier and boost overlap
+        loos = SCORE_LOOSENESS if SCORE_LOOSENESS > 0 else 1.0
+        multiplier = int(round(85 * loos))
+        min_allowed = 25
+        base = 35
+        # larger boost to combined similarity to reward partial/related matches
+        combined = min(1.0, combined + (0.08 * loos))
+
+    # Increase score spread by applying a gamma (exponent) transform to combined
+    # This exaggerates higher similarities and compresses lower ones, producing
+    # greater variation between jobs. Tunable via `gamma`.
+    gamma = 1.5
+    # Apply spread multiplier (favored-field hits increase dispersion)
+    raw = int(round((combined ** gamma) * multiplier * (spread_multiplier if 'spread_multiplier' in locals() else 1.0)))
+    score = max(min_allowed, min(99, base + raw))
+
+    # Build gaps ordered by priority then others
+    gaps = []
+    for s in (job.get("skills") or priority):
+        s_toks = _tokenize_and_map(s, synonyms)
+        present = any(tok in resume_tokens for tok in s_toks) if s_toks else False
+        if not present:
+            gaps.append(s)
+
+    return score, gaps
+
 
 def _parse_pdf_with_pre_llm(content: bytes):
     """
@@ -1442,6 +1707,29 @@ def recommend():
     data = request.get_json(force=True) or {}
     resume_id = data.get("resume_id")
     job_ids = data.get("job_ids", [])
+    user_id_for_rec = _get_user_id()
+    persist_recs = bool(data.get("persist", False))
+    provided_jobs_list = data.get("jobs") or []
+    # Build a lookup for provided job objects by job_id and external_id (if present)
+    provided_jobs = {}
+    for j in provided_jobs_list:
+        try:
+            if isinstance(j, dict):
+                if j.get("job_id") is not None:
+                    provided_jobs[int(j.get("job_id"))] = j
+                if j.get("external_id"):
+                    provided_jobs[str(j.get("external_id"))] = j
+        except Exception:
+            continue
+
+    # Per-request override to enable field-aware matcher for quick testing.
+    use_field_override = data.get("use_field_aware", None)
+    if use_field_override is not None:
+        try:
+            use_field_override = str(use_field_override).lower() in ("1", "true", "yes")
+        except Exception:
+            use_field_override = False
+    use_field = use_field_override if use_field_override is not None else USE_FIELD_AWARE_MATCHER
 
     if not resume_id:
         return bad("Missing 'resume_id'")
@@ -1474,25 +1762,57 @@ def recommend():
     if not resume_text:
         return bad("Resume not found")
 
+    # Use derived skills only; remove substring matching / scoring logic.
+    # This avoids any heuristic matching and returns results based on
+    # skills extracted from the resume (or empty if none).
     derived = _extract_resume_skills(resume_text, user_listed_skills)
 
     results = []
     for jid in job_ids:
-        job = MEM["jobs"].get(jid)
+        # allow jid to be passed as string or int
+        job = None
+        try:
+            key = int(jid)
+        except Exception:
+            key = jid
+        # first try in-memory store
+        job = MEM["jobs"].get(key) if key is not None else None
+        # then try provided jobs payload (fallback)
         if not job:
+            job = provided_jobs.get(key) or provided_jobs.get(str(jid))
+        if not job:
+            # nothing we can score without a job object; skip
             continue
-        score, gaps = _match_score(resume_text, job["skills"])
-        matched = [s for s in job["skills"] if s.lower() in resume_text.lower()] or derived[:3]
-        bullets = _make_bullets(job["title"], job["company"], matched)
-        cover = _make_cover_letter(
-            candidate_name, job["title"], job["company"], matched, gaps
-        )
+        if use_field:
+            # Field-aware scoring (non-LLM)
+            try:
+                    # Determine per-request loose scoring override
+                    use_loose_override = data.get("use_loose_scoring", None)
+                    if use_loose_override is not None:
+                        try:
+                            use_loose_override = str(use_loose_override).lower() in ("1", "true", "yes")
+                        except Exception:
+                            use_loose_override = False
+                    use_loose = use_loose_override if use_loose_override is not None else USE_LOOSE_SCORING
+
+                    score, gaps = _simple_match_score(resume_text, job, use_loose=use_loose)
+            except Exception as e:
+                app.logger.exception(f"_simple_match_score failed: {e}")
+                score, gaps = None, []
+            # matched skills prefer explicit job.skills overlap, else derived
+            matched = [s for s in (job.get("skills") or []) if s.lower() in (resume_text or "").lower()] or derived[:3]
+        else:
+            score, gaps = None, []
+            matched = derived[:3]
+
+        bullets = _make_bullets(job.get("title", ""), job.get("company", ""), matched)
+        cover = _make_cover_letter(candidate_name, job.get("title", ""), job.get("company", ""), matched, gaps[:3])
         results.append(
             {
                 "job_id": jid,
-                "title": job["title"],
-                "company": job["company"],
-                "location": job["location"],
+                "title": job.get("title"),
+                "company": job.get("company"),
+                "location": job.get("location"),
                 "score": score,
                 "gaps": gaps[:3],
                 "resume_bullets": bullets,
@@ -1501,6 +1821,47 @@ def recommend():
                 "derived_resume_skills": derived[:8],
             }
         )
+
+    # Optionally persist recommendations into `job_recommendations` so
+    # saved/applied views (or other queries) can surface the score later.
+    if persist_recs:
+        db2, cursor2 = get_db()
+        for r in results:
+            try:
+                jid = r.get("job_id")
+                score = r.get("score")
+                cover = r.get("cover_letter")
+                # Persist only when we have a DB and a user context
+                if db2 and user_id_for_rec and jid is not None:
+                    try:
+                        # delete any existing recommendation for this user+job, then insert
+                        cursor2.execute("DELETE FROM job_recommendations WHERE user_id=%s AND job_id=%s", (user_id_for_rec, int(jid)))
+                        cursor2.execute(
+                            """
+                            INSERT INTO job_recommendations
+                              (user_id, job_id, match_score, generated_resume, generated_cover_letter, recommended_at)
+                            VALUES (%s, %s, %s, %s, %s, NOW())
+                            """,
+                            (user_id_for_rec, int(jid), float(score) if score is not None else None, None, cover),
+                        )
+                        if hasattr(db2, 'commit'):
+                            db2.commit()
+                    except Exception:
+                        try:
+                            db2.rollback()
+                        except Exception:
+                            pass
+                else:
+                    # memory fallback
+                    MEM.setdefault("job_recommendations", []).append({
+                        "user_id": user_id_for_rec,
+                        "job_id": jid,
+                        "match_score": r.get("score"),
+                        "generated_cover_letter": r.get("cover_letter"),
+                        "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                    })
+            except Exception as e:
+                app.logger.exception(f"Failed to persist recommendation: {e}")
 
     return ok({"results": results})
 
@@ -1900,7 +2261,8 @@ def get_saved_jobs():
     cursor.execute("""
         SELECT sj.saved_job_id, sj.date_saved, sj.notes,
                j.job_id, j.title, j.company_name, j.location,
-               j.industry, j.salary_range, j.url, j.source, j.description
+               j.industry, j.salary_range, j.url, j.source, j.description,
+               (SELECT match_score FROM job_recommendations jr WHERE jr.user_id = sj.user_id AND jr.job_id = j.job_id ORDER BY jr.recommended_at DESC LIMIT 1) AS match_score
         FROM saved_jobs sj
         JOIN jobs j ON sj.job_id = j.job_id
         WHERE sj.user_id = %s
@@ -2028,7 +2390,8 @@ def get_applied_jobs():
     cursor.execute("""
         SELECT aj.applied_id, aj.applied_at,
             j.job_id, j.title, j.company_name, j.location,
-            j.salary_range, j.url, j.source
+            j.salary_range, j.url, j.source,
+            (SELECT match_score FROM job_recommendations jr WHERE jr.user_id = aj.user_id AND jr.job_id = j.job_id ORDER BY jr.recommended_at DESC LIMIT 1) AS match_score
         FROM applied_jobs aj
         JOIN jobs j ON aj.job_id = j.job_id
         WHERE aj.user_id = %s
