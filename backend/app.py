@@ -21,8 +21,6 @@ import html as _html
 
 from flask import Flask, request, jsonify, make_response, g
 from flask_cors import CORS
-from flask_limiter import Limiter
-from flask_limiter.util import get_remote_address
 from dotenv import load_dotenv
 
 # MySQL
@@ -54,13 +52,6 @@ def ml_post(path: str, payload: dict):
 # Environment Loading & Flask App Setup
 load_dotenv()
 app = Flask(__name__)
-# Rate Limiter (security)
-limiter = Limiter(
-    key_func=get_remote_address,
-    app=app,
-    default_limits=["200 per day", "50 per hour"]
-)
-
 
 # General App Config
 JOB_DESCRIPTION_MAX_CHARS = int(os.getenv("JOB_DESCRIPTION_MAX_CHARS", "2000"))
@@ -93,10 +84,8 @@ CORS(
     expose_headers=["Content-Type", "Authorization"],
 )
 
-# JWT Utilities
-JWT_SECRET = os.getenv("JWT_SECRET")
-if not JWT_SECRET:
-    raise RuntimeError("JWT_SECRET is not set. Add it to your environment variables.")
+# JWT / Auth Utilities
+JWT_SECRET = os.getenv("JWT_SECRET", "super-secret-key")
 JWT_ALGO = "HS256"
 JWT_EXPIRE_MINUTES = 30
 
@@ -118,6 +107,13 @@ def handle_uncaught(e):
 # -----------------------------
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+
+# Feature flag: enable field-aware simple matcher
+USE_FIELD_AWARE_MATCHER = str(os.getenv("USE_FIELD_AWARE_MATCHER", "false") or "").lower() in ("1", "true", "yes")
+# Feature flag: produce looser (more generous) scoring when enabled
+USE_LOOSE_SCORING = str(os.getenv("USE_LOOSE_SCORING", "true") or "").lower() in ("1", "true", "yes")
+# Feature flag: produce looser (more generous) scoring when enabled
+SCORE_LOOSENESS = float(os.getenv("SCORE_LOOSENESS", "1.65"))
 
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
@@ -286,10 +282,19 @@ def _normalize_ws(s: str) -> str:
 # Simple skill extraction / scoring utilities
 _BASE_SKILLS = {
     "python", "sql", "excel", "power bi", "tableau", "snowflake", "pandas", "numpy", "r",
-    "java", "javascript", "react", "node", "api", "rest", "fastapi", "flask",
-    "dashboards", "kpi", "etl", "data pipeline", "airflow", "docker", "kubernetes",
-    "git", "jira", "experimentation", "a b testing", "a/b testing", "statistics",
+    "java", "javascript", "react", "reactjs", "node", "nodejs", "api", "rest", "fastapi", "flask",
+    "dashboards", "kpi", "etl", "data pipeline", "airflow", "docker", "kubernetes", "k8s",
+    "git", "github", "gitlab", "jira", "confluence", "experimentation", "a b testing", "a/b testing", "statistics",
     "forecast", "supply chain", "sap", "ibp", "ml", "machine learning", "genai",
+    "tensorflow", "pytorch", "scikit-learn", "sklearn", "keras",
+    "spark", "hadoop", "hive", "bigquery", "redshift", "dbt",
+    "aws", "azure", "gcp", "terraform", "ansible", "helm",
+    "docker-compose", "prometheus", "grafana",
+    "typescript", "graphql", "webpack", "vite", "nextjs", "gatsby",
+    "html", "css", "sass", "tailwind", "bootstrap",
+    "c++", "c#", "golang", "go",
+    "microservices", "ci/cd", "restapi", "restful",
+    "tableau", "powerbi", "lookml", "metabase",
 }
 
 
@@ -343,6 +348,179 @@ def _make_cover_letter(
         f"and learn quickly to meet team goals.\n\n"
         f"Thank you for your time and consideration.\nSincerely,\n{who}"
     )
+
+
+# -----------------------------
+# Simple, field-aware non-LLM matching utilities
+# Profiles and keywords are loaded from `backend/field_profiles.py` to keep
+# `app.py` smaller and make profiles easy to export/edit.
+# -----------------------------
+import importlib.util
+_FIELD_KEYWORDS = {}
+FIELD_PROFILES = {}
+
+_profiles_json = os.path.join(os.path.dirname(__file__), "field_profiles.json")
+_profiles_path = os.path.join(os.path.dirname(__file__), "field_profiles.py")
+
+_loaded_profiles = False
+
+# Prefer loading the Python module directly (so you don't need to regenerate JSON).
+# Fall back to the exported JSON if the module is unavailable or fails to load.
+if os.path.exists(_profiles_path):
+    try:
+        spec = importlib.util.spec_from_file_location("backend_field_profiles", _profiles_path)
+        _fp_mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_fp_mod)
+
+        # If the module exposes a `to_dict()` helper (recommended), use it to
+        # obtain the canonical exported structure (field_keywords, profiles, base_skills).
+        if hasattr(_fp_mod, "to_dict"):
+            try:
+                _data = _fp_mod.to_dict()
+                _FIELD_KEYWORDS = _data.get("field_keywords", {}) or {}
+                FIELD_PROFILES = _data.get("profiles", {}) or {}
+                _BASE_SKILLS = set([s.lower() for s in (_data.get("base_skills") or [])])
+            except Exception:
+                # If to_dict() fails for any reason, fall back to inspecting module attrs
+                _FIELD_KEYWORDS = getattr(_fp_mod, "_FIELD_KEYWORDS", {}) or getattr(_fp_mod, "field_keywords", {})
+                FIELD_PROFILES = getattr(_fp_mod, "FIELD_PROFILES", {}) or getattr(_fp_mod, "profiles", {})
+                _BASE_SKILLS = set([s.lower() for s in (getattr(_fp_mod, "BASE_SKILLS", None) or getattr(_fp_mod, "_BASE_SKILLS", []) or [])])
+        else:
+            _FIELD_KEYWORDS = getattr(_fp_mod, "_FIELD_KEYWORDS", {}) or getattr(_fp_mod, "field_keywords", {})
+            FIELD_PROFILES = getattr(_fp_mod, "FIELD_PROFILES", {}) or getattr(_fp_mod, "profiles", {})
+            _BASE_SKILLS = set([s.lower() for s in (getattr(_fp_mod, "BASE_SKILLS", None) or getattr(_fp_mod, "_BASE_SKILLS", []) or [])])
+
+        _loaded_profiles = True
+        app.logger.info(f"Loaded field profiles from module: {_profiles_path}")
+    except Exception as e:
+        app.logger.warning(f"Failed to load field profiles from module {_profiles_path}: {e}")
+
+if not _loaded_profiles and os.path.exists(_profiles_json):
+    try:
+        with open(_profiles_json, "r", encoding="utf-8") as fh:
+            _data = json.load(fh)
+        _FIELD_KEYWORDS = _data.get("field_keywords", {}) or {}
+        FIELD_PROFILES = _data.get("profiles", {}) or {}
+        app.logger.info(f"Loaded field profiles from JSON: {_profiles_json}")
+        # Load base skills from exported JSON if present
+        _BASE_SKILLS = set([s.lower() for s in (_data.get("base_skills") or [])])
+        _loaded_profiles = True
+    except Exception as e:
+        app.logger.warning(f"Failed to load profiles from JSON {_profiles_json}: {e}")
+
+_STOPWORDS = {
+    "the", "and", "a", "an", "of", "in", "on", "for", "with", "to", "from", "by", "at", "as", "is", "are",
+    "be", "this", "that", "it", "its", "our", "you", "we", "your", "i",
+}
+
+def _tokenize_and_map(s: str, synonyms: dict | None = None) -> List[str]:
+    if not s:
+        return []
+    synonyms = synonyms or {}
+    s = s.lower()
+    s = re.sub(r"[^\w\s]", " ", s)
+    toks = [t for t in s.split() if t and t not in _STOPWORDS and len(t) > 1]
+    mapped = [synonyms.get(t, t) for t in toks]
+    return mapped
+
+def _jaccard(a: List[str], b: List[str]) -> float:
+    sa, sb = set(a), set(b)
+    if not sa or not sb:
+        return 0.0
+    inter = sa.intersection(sb)
+    union = sa.union(sb)
+    return len(inter) / (len(union) or 1)
+
+def _skill_overlap(resume_tokens: List[str], job_skills: List[str], synonyms: dict | None = None) -> float:
+    if not job_skills:
+        return 0.0
+    synonyms = synonyms or {}
+    # normalize job skills into tokens
+    skill_tokens = []
+    for s in job_skills:
+        skill_tokens.extend(_tokenize_and_map(s, synonyms))
+    if not skill_tokens:
+        return 0.0
+    found = 0
+    for skill in set(skill_tokens):
+        if skill in resume_tokens:
+            found += 1
+        else:
+            # check partial presence
+            if any(skill in rt for rt in resume_tokens):
+                found += 1
+    return found / len(set(skill_tokens))
+
+def _detect_field(job: dict) -> str | None:
+    explicit = (job.get("field") or job.get("category") or "").strip().lower()
+    if explicit and explicit in FIELD_PROFILES:
+        return explicit
+    txt = " ".join(filter(None, [job.get("title",""), job.get("description","")])).lower()
+    for fld, kws in _FIELD_KEYWORDS.items():
+        for kw in kws:
+            if kw in txt:
+                return fld
+    return None
+
+def _simple_match_score(resume_text: str, job: dict, use_loose: bool = False) -> Tuple[int, List[str]]:
+    """
+    Lightweight, field-aware score. Returns (score:int, gaps:list[str])
+    """
+    field = _detect_field(job) or "data"  # default to data if uncertain
+    profile = FIELD_PROFILES.get(field, {})
+    weights = profile.get("weights", {"skill": 0.6, "title": 0.25, "desc": 0.15})
+    synonyms = profile.get("synonyms", {})
+    priority = profile.get("priority_skills", [])
+
+    resume_tokens = _tokenize_and_map(resume_text or "", synonyms)
+    title_tokens = _tokenize_and_map(job.get("title", ""), synonyms)
+    desc_tokens = _tokenize_and_map(job.get("description") or job.get("full_description") or "", synonyms)
+    job_skills = job.get("skills") or priority
+
+    skill_overlap = _skill_overlap(resume_tokens, job_skills, synonyms)
+    title_sim = _jaccard(resume_tokens, title_tokens)
+    desc_sim = _jaccard(resume_tokens, desc_tokens)
+
+    # If description missing, reweight to rely more on skills/title
+    if not desc_tokens:
+        total = weights.get("skill", 0.6) + weights.get("title", 0.25)
+        w_skill = weights.get("skill", 0.6) / (total or 1)
+        w_title = weights.get("title", 0.25) / (total or 1)
+        w_desc = 0.0
+    else:
+        w_skill = weights.get("skill", 0.6)
+        w_title = weights.get("title", 0.25)
+        w_desc = weights.get("desc", 0.15)
+
+    # Combine component similarities into a single 0..1 value
+    combined = (skill_overlap * w_skill) + (title_sim * w_title) + (desc_sim * w_desc)
+
+    # Allow looser scoring mode: increase multiplier and slightly boost skill overlap
+    multiplier = 59
+    min_allowed = 35
+    base = 40
+    if use_loose:
+        # Apply a stronger looseness multiplier and boost overlap
+        loos = SCORE_LOOSENESS if SCORE_LOOSENESS > 0 else 1.0
+        multiplier = int(round(85 * loos))
+        min_allowed = 25
+        base = 35
+        # larger boost to combined similarity to reward partial/related matches
+        combined = min(1.0, combined + (0.08 * loos))
+
+    raw = int(round(combined * multiplier))
+    score = max(min_allowed, min(99, base + raw))
+
+    # Build gaps ordered by priority then others
+    gaps = []
+    for s in (job.get("skills") or priority):
+        s_toks = _tokenize_and_map(s, synonyms)
+        present = any(tok in resume_tokens for tok in s_toks) if s_toks else False
+        if not present:
+            gaps.append(s)
+
+    return score, gaps
+
 
 def _parse_pdf_with_pre_llm(content: bytes):
     """
@@ -545,7 +723,6 @@ def health():
 
 # POST /api/resumes  JSON {"text": "...", "meta":{"name":"...", "skills":[...], "experience":"..."}}
 # or multipart 'file'
-@limiter.limit("10 per minute")
 @app.post("/api/resumes")
 def upload_resume():
     db, cursor = get_db()
@@ -1029,7 +1206,6 @@ def _canonicalize_experience_input(s: str) -> str:
 # -----------------------------
 # Authentication endpoints
 # -----------------------------
-@limiter.limit("10 per minute")
 @app.post("/api/auth/register")
 def auth_register():
     data = request.get_json(force=True) or {}
@@ -1107,7 +1283,7 @@ def auth_register():
 
     return ok({"token": token, "user": user_obj})
 
-@limiter.limit("10 per minute")
+
 @app.post("/api/auth/login")
 def auth_login():
     data = request.get_json(force=True) or {}
@@ -1442,6 +1618,27 @@ def recommend():
     data = request.get_json(force=True) or {}
     resume_id = data.get("resume_id")
     job_ids = data.get("job_ids", [])
+    provided_jobs_list = data.get("jobs") or []
+    # Build a lookup for provided job objects by job_id and external_id (if present)
+    provided_jobs = {}
+    for j in provided_jobs_list:
+        try:
+            if isinstance(j, dict):
+                if j.get("job_id") is not None:
+                    provided_jobs[int(j.get("job_id"))] = j
+                if j.get("external_id"):
+                    provided_jobs[str(j.get("external_id"))] = j
+        except Exception:
+            continue
+
+    # Per-request override to enable field-aware matcher for quick testing.
+    use_field_override = data.get("use_field_aware", None)
+    if use_field_override is not None:
+        try:
+            use_field_override = str(use_field_override).lower() in ("1", "true", "yes")
+        except Exception:
+            use_field_override = False
+    use_field = use_field_override if use_field_override is not None else USE_FIELD_AWARE_MATCHER
 
     if not resume_id:
         return bad("Missing 'resume_id'")
@@ -1474,25 +1671,57 @@ def recommend():
     if not resume_text:
         return bad("Resume not found")
 
+    # Use derived skills only; remove substring matching / scoring logic.
+    # This avoids any heuristic matching and returns results based on
+    # skills extracted from the resume (or empty if none).
     derived = _extract_resume_skills(resume_text, user_listed_skills)
 
     results = []
     for jid in job_ids:
-        job = MEM["jobs"].get(jid)
+        # allow jid to be passed as string or int
+        job = None
+        try:
+            key = int(jid)
+        except Exception:
+            key = jid
+        # first try in-memory store
+        job = MEM["jobs"].get(key) if key is not None else None
+        # then try provided jobs payload (fallback)
         if not job:
+            job = provided_jobs.get(key) or provided_jobs.get(str(jid))
+        if not job:
+            # nothing we can score without a job object; skip
             continue
-        score, gaps = _match_score(resume_text, job["skills"])
-        matched = [s for s in job["skills"] if s.lower() in resume_text.lower()] or derived[:3]
-        bullets = _make_bullets(job["title"], job["company"], matched)
-        cover = _make_cover_letter(
-            candidate_name, job["title"], job["company"], matched, gaps
-        )
+        if use_field:
+            # Field-aware scoring (non-LLM)
+            try:
+                    # Determine per-request loose scoring override
+                    use_loose_override = data.get("use_loose_scoring", None)
+                    if use_loose_override is not None:
+                        try:
+                            use_loose_override = str(use_loose_override).lower() in ("1", "true", "yes")
+                        except Exception:
+                            use_loose_override = False
+                    use_loose = use_loose_override if use_loose_override is not None else USE_LOOSE_SCORING
+
+                    score, gaps = _simple_match_score(resume_text, job, use_loose=use_loose)
+            except Exception as e:
+                app.logger.exception(f"_simple_match_score failed: {e}")
+                score, gaps = None, []
+            # matched skills prefer explicit job.skills overlap, else derived
+            matched = [s for s in (job.get("skills") or []) if s.lower() in (resume_text or "").lower()] or derived[:3]
+        else:
+            score, gaps = None, []
+            matched = derived[:3]
+
+        bullets = _make_bullets(job.get("title", ""), job.get("company", ""), matched)
+        cover = _make_cover_letter(candidate_name, job.get("title", ""), job.get("company", ""), matched, gaps[:3])
         results.append(
             {
                 "job_id": jid,
-                "title": job["title"],
-                "company": job["company"],
-                "location": job["location"],
+                "title": job.get("title"),
+                "company": job.get("company"),
+                "location": job.get("location"),
                 "score": score,
                 "gaps": gaps[:3],
                 "resume_bullets": bullets,
@@ -1705,7 +1934,6 @@ def get_job(job_id: int):
 # -----------------------------
 # Chat endpoint for landing page
 # -----------------------------
-@limiter.limit("20 per minute")
 @app.post("/api/chat")
 def chat():
     """Simple chat endpoint for the landing-page assistant."""
