@@ -123,14 +123,11 @@ export default function AppliedJobs() {
 
   return (
     <div>
-      <div>
+      <div className="app-row">
         <a href="/" className="brand-right" aria-label="jobhunter.ai home">
           <span className="brand-dot-right" aria-hidden="true"></span>
           <span>jobhunter.ai</span>
         </a>
-      </div>
-
-      <div className="app-row">
         <nav className="sidebar">
           <ul>
             <li>
