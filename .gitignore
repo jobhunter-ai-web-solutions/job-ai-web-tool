@@ -12,8 +12,9 @@ __pycache__/
 .env
 backend/.env
 
-#node modules
+# node modules
 frontend/node_modules/
+node_modules/
 
 
 # database tester
