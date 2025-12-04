@@ -15,7 +15,7 @@ backend/.env
 # node modules
 frontend/node_modules/
 node_modules/
-
+frontend/.gitignore
 
 # database tester
 backend/db_test.pyvenv/
