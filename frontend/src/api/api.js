@@ -1,10 +1,16 @@
-// src/api/api.js
-
-// Use Vite-provided env or sensible defaults. Prefer VITE_API_BASE when set.
-// Use Vite-provided env or sensible defaults. Prefer VITE_API_BASE when set.
-const API_BASE =
+// frontend/src/api.js
+const API_BASE_URL =
   import.meta.env.VITE_API_BASE ||
-  (import.meta.env.PROD ? "https://job-ai-web-tool.onrender.com/api" : "http://localhost:5001/api");
+  'https://job-hunter-ai-web-tool.onrender.com';
+
+export async function apiGet(path, options = {}) {
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...options,
+    credentials: 'include',
+  });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
 
 // Helper: Handle errors & responses
 async function handleResponse(res) {
