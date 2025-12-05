@@ -1,11 +1,11 @@
 // src/api/api.js
 
 // Base API URL:
-// - Use VITE_API_BASE_URL when set
+// - Use VITE_API_BASE when set
 // - In production, default to the Render backend URL
 // - In development, default to localhost
 const API_BASE =
-  import.meta.env.VITE_API_BASE_URL ||
+  import.meta.env.VITE_API_BASE ||
   (import.meta.env.PROD
     ? "https://job-ai-web-tool.onrender.com/api"
     : "http://localhost:5001/api");
