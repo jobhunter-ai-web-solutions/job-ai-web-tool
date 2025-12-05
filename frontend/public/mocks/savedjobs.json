@@ -1,0 +1,41 @@
+[
+  {
+    "id": "job_4",
+    "title": "Full Stacks Engineer",
+    "company": "Netflix",
+    "location": "Los Angeles, CA",
+    "type": "Full-time",
+    "experience": "Entry",
+    "matchScore": 84,
+    "salaryMin": 110000,
+    "salaryMax": 120000,
+    "postedAt": "2025-10-10T00:00:00.000Z",
+    "skills": ["React", "Python", "CSS", "SQL"]
+  },
+  {
+    "id": "job_5",
+    "title": "Software Engineer I",
+    "company": "ZipRecruiter",
+    "location": "Santa Monica, CA",
+    "type": "Full-time",
+    "experience": "Entry",
+    "matchScore": 80,
+    "salaryMin": 100000,
+    "salaryMax": 110000,
+    "postedAt": "2025-10-14T00:00:00.000Z",
+    "skills": ["Python", "Javascript", "Java", "Go"]
+  },
+  {
+    "id": "job_6",
+    "title": "Firmware Developer",
+    "company": "IBM",
+    "location": "Research Park, California",
+    "type": "Hybrid",
+    "experience": "Entry",
+    "matchScore": 73,
+    "salaryMin": 100000,
+    "salaryMax": 115000,
+    "postedAt": "2025-10-12T00:00:00.000Z",
+    "skills": ["JavaScript", "Perl", "Bash", "Python"]
+  }
+]

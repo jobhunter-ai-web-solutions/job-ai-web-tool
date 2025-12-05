@@ -1,0 +1,41 @@
+[
+  {
+    "id": "job_1",
+    "title": "Frontend Engineer",
+    "company": "Meta",
+    "location": "Remote",
+    "type": "Full-time",
+    "experience": "Mid",
+    "matchScore": 87,
+    "salaryMin": 120000,
+    "salaryMax": 130000,
+    "postedAt": "2025-10-10T00:00:00.000Z",
+    "skills": ["React", "TypeScript", "CSS", "Accessibility"]
+  },
+  {
+    "id": "job_2",
+    "title": "Machine Learning Engineer",
+    "company": "Amazon",
+    "location": "San Francisco, CA",
+    "type": "Full-time",
+    "experience": "Senior",
+    "matchScore": 78,
+    "salaryMin": 100000,
+    "salaryMax": 130000,
+    "postedAt": "2025-10-14T00:00:00.000Z",
+    "skills": ["Python", "PyTorch", "ML Ops", "Data pipelines"]
+  },
+  {
+    "id": "job_6",
+    "title": "Firmware Developer",
+    "company": "IBM",
+    "location": "Research Park, California",
+    "type": "Hybrid",
+    "experience": "Entry",
+    "matchScore": 73,
+    "salaryMin": 100000,
+    "salaryMax": 115000,
+    "postedAt": "2025-10-12T00:00:00.000Z",
+    "skills": ["JavaScript", "Perl", "Bash", "Python"]
+  }
+]

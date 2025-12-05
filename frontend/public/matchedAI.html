@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Job matches - jobhunter.ai</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="jobAI.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div class="app-title">
+      <span class="app-dot"></span>
+      <span>jobhunter.ai</span>
+    </div>
+    <nav>
+      <a href="index.html">Landing</a>
+      <a href="resume_upload.html">Resume upload</a>
+      <a href="matchedAI.html" class="active">Search</a>
+      <a href="savedJobs.html">Saved jobs</a>
+      <a href="appliedJobs.html">Applied</a>
+    </nav>
+  </header>
+
+  <main class="app-main">
+    <aside class="app-sidebar">
+      <h2>Workspace</h2>
+      <ul class="app-nav">
+        <li><a href="resume_upload.html">Upload and store resume</a></li>
+        <li><a href="matchedAI.html" class="active">Search</a></li>
+        <li><a href="savedJobs.html">View saved jobs</a></li>
+        <li><a href="appliedJobs.html">View applied jobs</a></li>
+      </ul>
+    </aside>
+
+    <section class="app-content">
+      <div class="section-header">
+        <div>
+          <h1>Matched roles</h1>
+          <p>Search jobs with Adzuna and rank them against your saved resume.</p>
+        </div>
+      </div>
+
+      <div class="card" style="margin-bottom:16px;">
+        <form id="searchForm">
+          <div style="display:grid;grid-template-columns:2fr 1.4fr 1fr;gap:8px;flex-wrap:wrap;">
+            <div>
+              <label for="query">Target role</label>
+              <input id="query" type="text" placeholder="Data analyst, product manager..." />
+            </div>
+            <div>
+              <label for="location">Location</label>
+              <input id="location" type="text" placeholder="City, remote, or country" />
+            </div>
+            <div>
+              <label for="resumeId">Resume id</label>
+              <input id="resumeId" type="text" placeholder="1" />
+            </div>
+          </div>
+          <div class="spacing-s"></div>
+          <button class="btn primary" type="submit">Search and match</button>
+        </form>
+      </div>
+
+      <div class="card">
+        <div class="muted">Matched roles</div>
+        <div class="spacing-s"></div>
+        <div id="matchResults" class="job-list">
+          <!-- JS will render job matches here -->
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const API_BASE = "http://localhost:5055";
+
+    const searchForm = document.getElementById("searchForm");
+    const matchContainer = document.getElementById("matchResults");
+
+    function renderMatches(results){
+      matchContainer.innerHTML = "";
+      if (!results.length){
+        const p = document.createElement("p");
+        p.className = "muted";
+        p.textContent = "No matches yet. Try a different query or resume id.";
+        matchContainer.appendChild(p);
+        return;
+      }
+      results.forEach(item=>{
+        const card = document.createElement("article");
+        card.className = "job-card";
+        card.innerHTML = `
+          <div class="job-meta">
+            <div>
+              <div class="job-title">${item.title}</div>
+              <div class="job-company">${item.company} · ${item.location || ""}</div>
+            </div>
+            <span class="muted">Score ${item.score}</span>
+          </div>
+          <div class="job-tags">
+            ${(item.matched_skills || []).slice(0,4).map(s=>`<span class="tag">${s}</span>`).join("")}
+          </div>
+          <div class="job-actions">
+            <button class="btn">View gaps</button>
+            <button class="btn">Copy bullets</button>
+            <button class="btn">Copy cover letter</button>
+          </div>
+        `;
+        matchContainer.appendChild(card);
+      });
+    }
+
+    searchForm.addEventListener("submit", async (e)=>{
+      e.preventDefault();
+      const query = document.getElementById("query").value.trim();
+      const location = document.getElementById("location").value.trim();
+      const resumeId = document.getElementById("resumeId").value.trim();
+      if (!query || !resumeId) {
+        alert("Enter at least a query and resume id");
+        return;
+      }
+      matchContainer.innerHTML = "<p class='muted'>Searching jobs and matching...</p>";
+
+      try{
+        const searchRes = await fetch(`${API_BASE}/api/jobs/search`, {
+          method:"POST",
+          headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({ query, location, page:1, resultsPerPage:10 })
+        });
+        const jobsJson = await searchRes.json();
+        if (!searchRes.ok){
+          matchContainer.innerHTML = `<p class="muted">Error searching jobs: ${jobsJson.error || "unknown error"}</p>`;
+          return;
+        }
+        const jobIds = (jobsJson.results || []).map(j=>j.job_id);
+        if (!jobIds.length){
+          matchContainer.innerHTML = "<p class='muted'>No jobs returned for that query.</p>";
+          return;
+        }
+
+        const recRes = await fetch(`${API_BASE}/api/recommend`, {
+          method:"POST",
+          headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({ resume_id: Number(resumeId), job_ids: jobIds })
+        });
+        const recJson = await recRes.json();
+        if (!recRes.ok){
+          matchContainer.innerHTML = `<p class="muted">Error matching resume: ${recJson.error || "unknown error"}</p>`;
+          return;
+        }
+        renderMatches(recJson.results || []);
+      }catch(err){
+        matchContainer.innerHTML = "<p class='muted'>Network error talking to the backend.</p>";
+      }
+    });
+  </script>
+</body>
+</html>
